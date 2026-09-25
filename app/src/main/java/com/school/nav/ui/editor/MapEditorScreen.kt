@@ -72,7 +72,11 @@ import com.school.nav.state.EditorUiState
 import com.school.nav.ui.components.NavBarSpace
 import com.school.nav.ui.components.TestTags
 import com.school.nav.ui.theme.NavColors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** 搜索防抖时长：Geocoder 有调用频率限制，敲一个字查一次很容易被限流。 */
+private const val SEARCH_DEBOUNCE_MS = 300L
 
 /**
  * 地图编辑器页（导航栏「地图」）。
@@ -213,9 +217,12 @@ fun MapEditorScreen(
                 if (query.isBlank()) {
                     results = emptyList()
                 } else {
-                    // 边输边搜：输入变化就发一次查询，旧的由协程取消
+                    // 边输边搜，但**防抖 300ms**：Geocoder 有调用频率限制，
+                    // 每敲一个字就查一次很容易被限流，而且每次查询现在会做多轮降级。
+                    // 用 delay 实现防抖：新的输入会取消上一个协程，只有停顿下来才真正查询。
                     searching = true
                     scope.launch {
+                        delay(SEARCH_DEBOUNCE_MS)
                         results = searcher.search(query)
                         searching = false
                     }
@@ -226,7 +233,7 @@ fun MapEditorScreen(
                 scope.launch {
                     results = searcher.search(query)
                     searching = false
-                    if (results.isEmpty()) searchError = "没找到「$query」，换个说法试试"
+                    if (results.isEmpty()) searchError = "没找到「$query」。可以试试少写几个字，或写上一级地名（如只写城市名）。"
                 }
             },
             onPick = { result ->
@@ -484,9 +491,14 @@ private fun SearchOverlay(
                             maxLines = 1,
                         )
                         Text(
-                            text = "%.5f, %.5f".format(result.point.lat, result.point.lng),
+                            text = if (result.isFuzzy) {
+                                // 说清是放宽后的近似结果，免得用户以为搜错了
+                                "近似匹配「${result.matchedKeyword}」· ${result.coordinateText}"
+                            } else {
+                                result.coordinateText
+                            },
                             fontSize = 11.sp,
-                            color = NavColors.TextSecondary,
+                            color = if (result.isFuzzy) NavColors.Brand else NavColors.TextSecondary,
                         )
                     }
                 }

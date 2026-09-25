@@ -11,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -20,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.school.nav.AppContainer
 import com.school.nav.state.MapEditorViewModel
 import com.school.nav.state.NavViewModel
@@ -88,6 +88,45 @@ fun AppShell(
         editorViewModel.messages.collect { snackbarHostState.showSnackbar(it) }
     }
 
+    /*
+     * 地图页用 movableContentOf 包起来，这是「切页签回来地图不刷新」的关键。
+     *
+     * 页面是 `when` 切换的，切走时整棵子树会离开组合树。而地图的 MapView 是在页面里
+     * `remember { MapView(context) }` 建的 —— 子树一销毁它就跟着销毁，再切回来会新建，
+     * 相机位置、overlay、GL 上下文全部重置，表现就是「地图刷新了」。
+     *
+     * 放进 movableContentOf 后：Map 页签激活时它挂在下面的位置，切走时只是被**移动**
+     * （移动的节点不参与组合，但实例仍然存活），所以切回来相机与 overlay 原样还在。
+     *
+     * 限制：这个槽位必须在组合的任何分支之外、且只被调用一次，否则 Compose 会报错。
+     */
+    val mapContent = movableContentOf {
+        MapEditorScreen(
+            state = editorState,
+            onMapClick = { editorViewModel.addPoint(it) },
+            onModeChange = { editorViewModel.setMode(it) },
+            onTargetBuildingChange = { editorViewModel.setTargetBuilding(it) },
+            onFloorChange = { editorViewModel.setFloorLevel(it) },
+            onEndFloorChange = { editorViewModel.setEndFloorLevel(it) },
+            onBuildingFloorCountChange = { id, count ->
+                editorViewModel.setBuildingFloorCount(id, count)
+            },
+            onNameChange = { editorViewModel.setDraftName(it) },
+            onFloorCountChange = { editorViewModel.setDraftFloorCount(it) },
+            onUndo = { editorViewModel.undoPoint() },
+            onFinish = { editorViewModel.finishDraft() },
+            onCancelDraft = { editorViewModel.cancelDraft() },
+            onRemoveBuilding = { editorViewModel.removeBuilding(it) },
+            onRemoveElement = { b, level, e -> editorViewModel.removeElement(b, level, e) },
+            onSave = { editorViewModel.save() },
+            onReload = { editorViewModel.reload() },
+            onGoMyLocation = { editorViewModel.goToMyLocation() },
+            onCenterConsumed = { editorViewModel.consumeCenterRequest(it) },
+            onGoToPoint = { editorViewModel.goTo(it) },
+            onGoSettings = { showSettings = true },
+        )
+    }
+
     Scaffold(
         containerColor = NavColors.PageBackground,
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
@@ -97,14 +136,14 @@ fun AppShell(
             // key 里带上 showSettings：设置页与「我的」是两个不同的可保存状态
             val pageKey = if (showSettings) "settings" else selectedTab.name
 
-            stateHolder.SaveableStateProvider(key = pageKey) {
-                val contentPadding = PaddingValues(
-                    start = horizontalPadding,
-                    end = horizontalPadding,
-                    top = topPadding + innerPadding.calculateTopPadding(),
-                    bottom = NavBarSpace,
-                )
+            val contentPadding = PaddingValues(
+                start = horizontalPadding,
+                end = horizontalPadding,
+                top = topPadding + innerPadding.calculateTopPadding(),
+                bottom = NavBarSpace,
+            )
 
+            stateHolder.SaveableStateProvider(key = pageKey) {
                 when {
                     showSettings -> SettingsScreen(
                         currentKey = editorState.apiKey,
@@ -127,33 +166,7 @@ fun AppShell(
                         contentPadding = contentPadding,
                     )
 
-                    selectedTab == NavTab.Map -> MapEditorScreen(
-                        state = editorState,
-                        onMapClick = { editorViewModel.addPoint(it) },
-                        onModeChange = { editorViewModel.setMode(it) },
-                        onTargetBuildingChange = { editorViewModel.setTargetBuilding(it) },
-                        onFloorChange = { editorViewModel.setFloorLevel(it) },
-                        onEndFloorChange = { editorViewModel.setEndFloorLevel(it) },
-                        onBuildingFloorCountChange = { id, count ->
-                            editorViewModel.setBuildingFloorCount(id, count)
-                        },
-                        onNameChange = { editorViewModel.setDraftName(it) },
-                        onFloorCountChange = { editorViewModel.setDraftFloorCount(it) },
-                        onUndo = { editorViewModel.undoPoint() },
-                        onFinish = { editorViewModel.finishDraft() },
-                        onCancelDraft = { editorViewModel.cancelDraft() },
-                        onRemoveBuilding = { editorViewModel.removeBuilding(it) },
-                        onRemoveElement = { b, level, e ->
-                            editorViewModel.removeElement(b, level, e)
-                        },
-                        onSave = { editorViewModel.save() },
-                        onReload = { editorViewModel.reload() },
-                        onGoMyLocation = { editorViewModel.goToMyLocation() },
-                        onCenterConsumed = { editorViewModel.consumeCenterRequest(it) },
-                        onGoToPoint = { editorViewModel.goTo(it) },
-                        onGoSettings = { showSettings = true },
-                        contentPadding = contentPadding,
-                    )
+                    selectedTab == NavTab.Map -> mapContent()
 
                     else -> ProfileScreen(
                         state = navState,
