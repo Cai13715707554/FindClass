@@ -1,7 +1,6 @@
 package com.school.nav.data
 
 import android.util.Log
-import com.school.nav.core.data.BuildingOutline
 import com.school.nav.core.data.EditorConfig
 import com.school.nav.core.data.EditorConfigCodec
 import java.io.File
@@ -96,14 +95,14 @@ class EditorConfigStore(
      * 只是用户暂时拿不到文件，因此返回 warning 让 UI 能如实提示。
      */
     fun save(
-        outlines: List<BuildingOutline>,
+        outlines: List<com.school.nav.core.data.EditorBuilding>,
         nowMillis: Long = System.currentTimeMillis(),
     ): SaveResult {
         val config = EditorConfig(
             schemaVersion = EditorConfig.CURRENT_SCHEMA_VERSION,
             exportedAtMillis = nowMillis,
-            // 只存有效轮廓：点太少或重合的存进去也没法用，还会让下次自检报警
-            buildings = outlines.filter { it.isValid },
+            // 丢掉什么都没画的草稿：既没有合法轮廓、也没有任何元素的，存进去只是噪声
+            buildings = outlines.filter { it.hasValidPolygon || it.elementCount > 0 },
         )
         val text = EditorConfigCodec.encode(config)
         val warnings = mutableListOf<String>()

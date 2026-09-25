@@ -1,7 +1,12 @@
 package com.school.nav.data
 
-import com.school.nav.core.data.BuildingOutline
+import com.school.nav.core.data.EditorBuilding
+import com.school.nav.core.data.EditorConfig
 import com.school.nav.core.data.EditorConfigCodec
+import com.school.nav.core.data.EditorElement
+import com.school.nav.core.data.EditorMode
+import com.school.nav.core.data.FloorDraft
+import com.school.nav.core.model.ElementType
 import com.school.nav.core.model.LngLat
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -41,12 +46,32 @@ class EditorConfigStoreTest {
         root.deleteRecursively()
     }
 
-    private fun outline(id: String, name: String, count: Int = 4): BuildingOutline =
-        BuildingOutline(
+    private fun outline(id: String, name: String, count: Int = 4): EditorBuilding =
+        EditorBuilding(
             id = id,
             name = name,
             polygon = (0 until count).map { LngLat(113.13 + it * 0.001, 23.13 + it * 0.001) },
         )
+
+    /** 一栋带楼层元素的楼，用于验证元素也能落盘。 */
+    private fun withElements(id: String, name: String): EditorBuilding = EditorBuilding(
+        id = id,
+        name = name,
+        polygon = (0 until 4).map { LngLat(113.13 + it * 0.001, 23.13 + it * 0.001) },
+        floors = listOf(
+            FloorDraft(
+                level = 1,
+                elements = listOf(
+                    EditorElement.from(
+                        mode = EditorMode.Room,
+                        id = "room-101",
+                        name = "101",
+                        points = (0 until 3).map { LngLat(113.131 + it * 0.0002, 23.131) },
+                    ),
+                ),
+            ),
+        ),
+    )
 
     // ------------------------------------------------------------ 路径
 
@@ -111,10 +136,22 @@ class EditorConfigStoreTest {
     }
 
     @Test
-    fun `无效轮廓不会被写进文件`() {
-        val result = store.save(
-            listOf(outline("A", "A栋"), outline("C", "C栋", count = 2)),
-        )
+    fun `楼层元素也会被保存并读回`() {
+        store.save(listOf(withElements("A", "A栋")))
+
+        val building = store.load().buildings.single()
+        assertEquals(1, building.elementCount)
+        val element = building.floor(1)!!.elements.single()
+        assertEquals("101", element.name)
+        assertEquals(ElementType.Room, element.elementType)
+        assertEquals(3, element.points.size)
+    }
+
+    @Test
+    fun `什么都没画的草稿不会被写进文件`() {
+        val empty = EditorBuilding(id = "X", name = "空楼", polygon = emptyList())
+        val result = store.save(listOf(outline("A", "A栋"), empty))
+
         assertTrue(result.isSuccess)
         assertEquals("只有 A 栋该被保存", listOf("A"), store.load().buildings.map { it.id })
     }

@@ -367,19 +367,30 @@ object TestTags {
     const val EditorMap = "editor_map"
     const val EditorNoKey = "editor_no_key"
     const val EditorGoSettings = "editor_go_settings"
-    const val EditorDraftCard = "editor_draft_card"
+
+    /** 右上角绘制模式下拉；具体项用 `${EditorModeItem}_${EditorMode.name}`。 */
+    const val EditorModeDropdown = "editor_mode_dropdown"
+    const val EditorModeItem = "editor_mode_item"
+
+    const val EditorSearchField = "editor_search_field"
+    const val EditorSearchResults = "editor_search_results"
+    const val EditorMyLocation = "editor_my_location"
+
     const val EditorDraftHint = "editor_draft_hint"
     const val EditorNameField = "editor_name_field"
     const val EditorUndo = "editor_undo"
     const val EditorCancelDraft = "editor_cancel_draft"
     const val EditorFinish = "editor_finish"
+    const val EditorFinishConfirm = "editor_finish_confirm"
     const val EditorOutlineList = "editor_outline_list"
-    const val EditorSaveCard = "editor_save_card"
+    const val EditorListClose = "editor_list_close"
     const val EditorSave = "editor_save"
     const val EditorReload = "editor_reload"
     const val EditorSavePath = "editor_save_path"
 
-    /** 每行的删除按钮用 `${EditorDelete}_${id}` 拼。 */
+    /** 每行按钮用 `${EditorDelete}_${id}` 之类拼。 */
     const val EditorDelete = "editor_delete"
     const val EditorDeleteConfirm = "editor_delete_confirm"
+    const val EditorBuildingRow = "editor_building_row"
+    const val EditorRemoveElement = "editor_remove_element"
 }

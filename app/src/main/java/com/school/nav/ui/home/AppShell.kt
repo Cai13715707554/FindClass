@@ -22,7 +22,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.school.nav.AppContainer
-import com.school.nav.core.data.BuildingOutline
 import com.school.nav.state.MapEditorViewModel
 import com.school.nav.state.NavViewModel
 import com.school.nav.ui.components.BottomNavBar
@@ -62,17 +61,6 @@ fun AppShell(container: AppContainer) {
 
     val navState by navViewModel.uiState.collectAsStateWithLifecycle()
     val editorState by editorViewModel.uiState.collectAsStateWithLifecycle()
-    val referenceBuildings = remember {
-        editorViewModel.existingBuildings.value.map { building ->
-            BuildingOutline(
-                id = building.id,
-                name = building.name,
-                polygon = building.polygon,
-            )
-        }
-    }
-
-    val snackbarHostState = remember { SnackbarHostState() }
 
     // 存序号而不是直接存枚举：枚举不是自动可保存类型，存序号再还原最简单
     var selectedIndex by rememberSaveable { mutableIntStateOf(NavTab.Home.ordinal) }
@@ -80,6 +68,13 @@ fun AppShell(container: AppContainer) {
     val selectedTab = NavTab.entries[selectedIndex]
 
     val stateHolder = rememberSaveableStateHolder()
+
+    // 从设置页返回时刷新 Key 状态（用户可能在设置里刚填/清了 Key）
+    LaunchedEffect(showSettings) {
+        if (!showSettings) editorViewModel.refreshApiKey()
+    }
+
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // 两个页面共用同一套内边距：顶部留出系统状态栏 + 标题呼吸位，底部留出悬浮导航栏
     val horizontalPadding = 12.dp
@@ -134,17 +129,24 @@ fun AppShell(container: AppContainer) {
 
                     selectedTab == NavTab.Map -> MapEditorScreen(
                         state = editorState,
-                        referenceBuildings = referenceBuildings,
                         onMapClick = { editorViewModel.addPoint(it) },
+                        onModeChange = { editorViewModel.setMode(it) },
+                        onTargetBuildingChange = { editorViewModel.setTargetBuilding(it) },
+                        onFloorChange = { editorViewModel.setFloorLevel(it) },
+                        onNameChange = { editorViewModel.setDraftName(it) },
                         onUndo = { editorViewModel.undoPoint() },
                         onFinish = { editorViewModel.finishDraft() },
                         onCancelDraft = { editorViewModel.cancelDraft() },
-                        onNameChange = { editorViewModel.setDraftName(it) },
-                        onRemove = { editorViewModel.removeOutline(it) },
+                        onRemoveBuilding = { editorViewModel.removeBuilding(it) },
+                        onRemoveElement = { b, level, e ->
+                            editorViewModel.removeElement(b, level, e)
+                        },
                         onSave = { editorViewModel.save() },
                         onReload = { editorViewModel.reload() },
+                        onGoMyLocation = { editorViewModel.goToMyLocation() },
+                        onCenterConsumed = { editorViewModel.consumeCenterRequest(it) },
+                        onGoToPoint = { editorViewModel.goTo(it) },
                         onGoSettings = { showSettings = true },
-                        contentPadding = contentPadding,
                     )
 
                     else -> ProfileScreen(

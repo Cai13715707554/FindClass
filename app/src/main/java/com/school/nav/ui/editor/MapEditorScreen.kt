@@ -1,102 +1,299 @@
 package com.school.nav.ui.editor
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.school.nav.core.data.BuildingOutline
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import com.school.nav.core.data.EditorMode
+import com.school.nav.core.model.LngLat
+import com.school.nav.data.PoiResult
+import com.school.nav.data.PoiSearcher
 import com.school.nav.state.EditorUiState
-import com.school.nav.ui.components.EmptyHint
 import com.school.nav.ui.components.NavBarSpace
-import com.school.nav.ui.components.NavCard
-import com.school.nav.ui.components.SectionLabel
 import com.school.nav.ui.components.TestTags
 import com.school.nav.ui.theme.NavColors
+import kotlinx.coroutines.launch
 
 /**
  * 地图编辑器页（导航栏「地图」）。
  *
- * 第一版只画**楼栋外轮廓**：在真实地图上依次点出顶点，围成多边形，命名后保存成配置文件。
- * 楼层与房间元素留给后续版本。
+ * 布局原则：**地图占满全屏**，所有控件都是浮在地图上的小卡片，
+ * 而不是把地图压在下面留半屏给面板 —— 画轮廓时视野越大越好。
  *
- * 没配高德 Key 时不渲染地图，而是给一段明确的引导 —— 地图 SDK 缺 Key 时只会白屏，
- * 那种「什么都不显示」的失败方式对用户毫无帮助。
+ * 控件分布：
+ *  - 顶部：搜索框（找地点，用户在家也能定位到学校）+ 右上角绘制模式下拉；
+ *  - 右侧：定位、撤销、放弃当前绘制的圆形按钮；
+ *  - 底部：状态一行 + 「成面」「保存导入」；
+ *  - 楼栋/元素清单收进弹层，不占常驻空间。
  */
 @Composable
 fun MapEditorScreen(
     state: EditorUiState,
-    referenceBuildings: List<BuildingOutline>,
-    onMapClick: (com.school.nav.core.model.LngLat) -> Unit,
+    onMapClick: (LngLat) -> Unit,
+    onModeChange: (EditorMode) -> Unit,
+    onTargetBuildingChange: (String?) -> Unit,
+    onFloorChange: (Int) -> Unit,
+    onNameChange: (String) -> Unit,
     onUndo: () -> Unit,
     onFinish: () -> Unit,
     onCancelDraft: () -> Unit,
-    onNameChange: (String) -> Unit,
-    onRemove: (String) -> Unit,
+    onRemoveBuilding: (String) -> Unit,
+    onRemoveElement: (String, Int, String) -> Unit,
     onSave: () -> Unit,
     onReload: () -> Unit,
+    onGoMyLocation: () -> Unit,
+    onCenterConsumed: (Long) -> Unit,
+    onGoToPoint: (LngLat) -> Unit,
     onGoSettings: () -> Unit,
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(
-        start = 12.dp,
-        end = 12.dp,
-        top = 24.dp,
-        bottom = NavBarSpace,
-    ),
 ) {
-    var pendingDelete by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val searcher = remember { PoiSearcher(context) }
+    val scope = rememberCoroutineScope()
 
-    Column(
+    var showList by rememberSaveable { mutableStateOf(false) }
+    var showNameDialog by rememberSaveable { mutableStateOf(false) }
+    var searchText by rememberSaveable { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
+    var results by remember { mutableStateOf(emptyList<PoiResult>()) }
+
+    if (!state.hasApiKey) {
+        EditorNeedsKey(onGoSettings = onGoSettings, modifier = modifier)
+        return
+    }
+
+    Box(
         modifier = modifier
-            .fillMaxSize()
-            .padding(start = 12.dp, end = 12.dp),
+            .fillMaxWidth()
+            .testTag(TestTags.EditorScreen),
     ) {
-        // ---- 标题 ----
-        Column(modifier = Modifier.padding(top = contentPadding.calculateTopPadding())) {
-            Text(
-                text = "地图编辑器",
-                style = MaterialTheme.typography.titleLarge,
-                color = NavColors.TextPrimary,
+        // ---- 全屏地图 ----
+        AmapEditorView(
+            draftPoints = state.draftPoints,
+            buildings = state.buildings,
+            centerRequest = state.centerRequest,
+            onMapClick = onMapClick,
+            onCenterConsumed = onCenterConsumed,
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight()
+                .testTag(TestTags.EditorMap),
+        )
+
+        // ---- 顶部：搜索 + 模式下拉 ----
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            SearchBox(
+                text = searchText,
+                searching = searching,
+                enabled = searcher.isAvailable(),
+                modifier = Modifier.weight(1f),
+                onTextChange = {
+                    searchText = it
+                    results = emptyList()
+                },
+                onSubmit = { query ->
+                    if (query.isBlank()) return@SearchBox
+                    searching = true
+                    scope.launch {
+                        results = searcher.search(query)
+                        searching = false
+                    }
+                },
             )
-            Text(
-                text = "在真实地图上点选楼栋外轮廓，保存后自动导入",
-                style = MaterialTheme.typography.bodyMedium,
-                color = NavColors.TextSecondary,
-                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+
+            ModeDropdown(current = state.mode, onSelect = onModeChange)
+        }
+
+        // 搜索结果浮层
+        if (results.isNotEmpty()) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 12.dp, end = 96.dp, top = 76.dp)
+                    .heightIn(max = 260.dp)
+                    .testTag(TestTags.EditorSearchResults),
+                shape = MaterialTheme.shapes.medium,
+                color = NavColors.Card,
+                shadowElevation = 6.dp,
+            ) {
+                LazyColumn {
+                    items(results) { result ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onGoToPoint(result.point)
+                                    searchText = result.name
+                                    results = emptyList()
+                                }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                text = result.name,
+                                fontSize = 14.sp,
+                                color = NavColors.TextPrimary,
+                                maxLines = 1,
+                            )
+                            Text(
+                                text = "%.5f, %.5f".format(result.point.lat, result.point.lng),
+                                fontSize = 11.sp,
+                                color = NavColors.TextSecondary,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- 右侧圆形工具 ----
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            RoundTool(
+                icon = Icons.Filled.LocationOn,
+                contentDescription = "回到我的位置",
+                testTag = TestTags.EditorMyLocation,
+                onClick = onGoMyLocation,
+            )
+            RoundTool(
+                icon = Icons.AutoMirrored.Filled.Undo,
+                contentDescription = "撤销最后一个点",
+                testTag = TestTags.EditorUndo,
+                enabled = state.draftPoints.isNotEmpty(),
+                onClick = onUndo,
+            )
+            RoundTool(
+                icon = Icons.Filled.Close,
+                contentDescription = "放弃当前绘制",
+                testTag = TestTags.EditorCancelDraft,
+                enabled = state.draftPoints.isNotEmpty(),
+                onClick = onCancelDraft,
             )
         }
 
-        if (!state.hasApiKey) {
-            // ---- 没配 Key：给引导，而不是白屏地图 ----
-            NavCard(modifier = Modifier.testTag(TestTags.EditorNoKey)) {
-                SectionLabel(text = "需要先配置高德地图 Key")
-                EmptyHint(
+        // ---- 底部：状态 + 主操作 ----
+        BottomBar(
+            state = state,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            onShowList = { showList = true },
+            onFinish = { showNameDialog = true },
+            onSave = onSave,
+        )
+    }
+
+    if (showList) {
+        BuildingListDialog(
+            state = state,
+            onDismiss = { showList = false },
+            onTargetBuildingChange = onTargetBuildingChange,
+            onFloorChange = onFloorChange,
+            onRemoveBuilding = onRemoveBuilding,
+            onRemoveElement = onRemoveElement,
+            onReload = onReload,
+        )
+    }
+
+    if (showNameDialog) {
+        NameDialog(
+            mode = state.mode,
+            initial = state.draftName,
+            onDismiss = { showNameDialog = false },
+            onConfirm = { name ->
+                onNameChange(name)
+                showNameDialog = false
+                onFinish()
+            },
+        )
+    }
+}
+
+/** 没配 Key 时的引导。地图 SDK 缺 Key 只会白屏，那种失败方式对用户毫无帮助。 */
+@Composable
+private fun EditorNeedsKey(onGoSettings: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(24.dp)
+            .testTag(TestTags.EditorNoKey),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = NavColors.Card,
+            shadowElevation = 4.dp,
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text(
+                    text = "需要先配置高德地图 Key",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = NavColors.TextPrimary,
+                )
+                Text(
                     text = "地图渲染依赖高德 SDK。Key 与「包名 + 签名 SHA1」绑定，" +
                         "需要在高德开放平台申请后填到设置里。",
-                    modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
+                    fontSize = 13.sp,
+                    color = NavColors.TextSecondary,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 14.dp),
                 )
                 Button(
                     onClick = onGoSettings,
@@ -105,255 +302,293 @@ fun MapEditorScreen(
                         .testTag(TestTags.EditorGoSettings),
                 ) { Text("去设置里填写 Key") }
             }
-            return@Column
-        }
-
-        // ---- 地图 ----
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .heightIn(min = 240.dp),
-        ) {
-            AmapEditorView(
-                apiKey = state.apiKey,
-                draftPoints = state.draftPoints,
-                outlines = state.outlines,
-                referenceBuildings = referenceBuildings,
-                onMapClick = onMapClick,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag(TestTags.EditorMap),
-            )
-        }
-
-        // ---- 绘制操作区 ----
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 320.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(top = 10.dp, bottom = contentPadding.calculateBottomPadding()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            DraftCard(
-                state = state,
-                onNameChange = onNameChange,
-                onUndo = onUndo,
-                onFinish = onFinish,
-                onCancelDraft = onCancelDraft,
-            )
-
-            OutlinesCard(
-                outlines = state.outlines,
-                pendingDelete = pendingDelete,
-                onAskDelete = { pendingDelete = it },
-                onCancelDelete = { pendingDelete = null },
-                onConfirmDelete = { id ->
-                    onRemove(id)
-                    pendingDelete = null
-                },
-            )
-
-            SaveCard(state = state, onSave = onSave, onReload = onReload)
         }
     }
 }
 
-/** 正在画的多边形：顶点数、命名、撤销/成面。 */
+/** 顶部搜索框。用于用户不在学校时定位到目标地点。 */
 @Composable
-private fun DraftCard(
-    state: EditorUiState,
-    onNameChange: (String) -> Unit,
-    onUndo: () -> Unit,
-    onFinish: () -> Unit,
-    onCancelDraft: () -> Unit,
+private fun SearchBox(
+    text: String,
+    searching: Boolean,
+    enabled: Boolean,
+    onTextChange: (String) -> Unit,
+    onSubmit: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    NavCard(modifier = Modifier.testTag(TestTags.EditorDraftCard)) {
-        SectionLabel(text = "正在绘制", dotColor = NavColors.Brand)
-
-        Text(
-            text = if (state.draftPoints.isEmpty()) {
-                "在地图上依次点选楼栋的拐角。至少 ${EditorUiState.MIN_POLYGON_POINTS} 个点。"
-            } else {
-                "已选 ${state.draftPoints.size} 个点" +
-                    if (!state.canFinishDraft) "，还需要 ${EditorUiState.MIN_POLYGON_POINTS - state.draftPoints.size} 个" else ""
-            },
-            fontSize = 14.sp,
-            color = NavColors.TextSecondary,
-            modifier = Modifier
-                .padding(top = 8.dp, bottom = 8.dp)
-                .testTag(TestTags.EditorDraftHint),
-        )
-
-        OutlinedTextField(
-            value = state.draftName,
-            onValueChange = onNameChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag(TestTags.EditorNameField),
-            singleLine = true,
-            label = { Text("楼栋名称，如 A栋") },
-            shape = MaterialTheme.shapes.small,
-        )
-
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        color = NavColors.Card,
+        shadowElevation = 6.dp,
+    ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedButton(
-                onClick = onUndo,
-                enabled = state.draftPoints.isNotEmpty(),
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag(TestTags.EditorUndo),
-            ) { Text("撤销点") }
-
-            OutlinedButton(
-                onClick = onCancelDraft,
-                enabled = state.draftPoints.isNotEmpty(),
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag(TestTags.EditorCancelDraft),
-            ) { Text("重画") }
-
-            Button(
-                onClick = onFinish,
-                enabled = state.canFinishDraft,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag(TestTags.EditorFinish),
-            ) { Text("成面") }
-        }
-    }
-}
-
-/** 已画好的楼栋列表。 */
-@Composable
-private fun OutlinesCard(
-    outlines: List<BuildingOutline>,
-    pendingDelete: String?,
-    onAskDelete: (String) -> Unit,
-    onCancelDelete: () -> Unit,
-    onConfirmDelete: (String) -> Unit,
-) {
-    NavCard(modifier = Modifier.testTag(TestTags.EditorOutlineList)) {
-        SectionLabel(text = "已绘制（${outlines.size}）", dotColor = NavColors.Green)
-
-        if (outlines.isEmpty()) {
-            EmptyHint(
-                text = "还没有画好的楼栋。",
-                modifier = Modifier.padding(top = 8.dp),
+            Icon(
+                imageVector = Icons.Filled.Search,
+                contentDescription = null,
+                tint = NavColors.TextSecondary,
+                modifier = Modifier.size(18.dp),
             )
-            return@NavCard
-        }
-
-        outlines.forEach { outline ->
-            Row(
+            OutlinedTextField(
+                value = text,
+                onValueChange = onTextChange,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column {
+                    .weight(1f)
+                    .testTag(TestTags.EditorSearchField),
+                singleLine = true,
+                enabled = enabled,
+                placeholder = {
                     Text(
-                        text = outline.name,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = NavColors.TextPrimary,
-                    )
-                    Text(
-                        text = "${outline.polygon.size} 个顶点 · id=${outline.id}",
-                        fontSize = 12.sp,
+                        text = if (enabled) "搜索地点，如 某某大学" else "本机不支持地点搜索",
+                        fontSize = 13.sp,
                         color = NavColors.TextSecondary,
                     )
-                }
+                },
+                trailingIcon = {
+                    when {
+                        searching -> CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = NavColors.Brand,
+                        )
 
-                if (pendingDelete == outline.id) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedButton(onClick = onCancelDelete) { Text("取消") }
-                        Button(
-                            onClick = { onConfirmDelete(outline.id) },
-                            modifier = Modifier.testTag(TestTags.EditorDeleteConfirm),
-                        ) { Text("删除") }
+                        text.isNotEmpty() -> IconButton(
+                            onClick = { onTextChange("") },
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "清空",
+                                tint = NavColors.TextSecondary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                     }
-                } else {
-                    OutlinedButton(
-                        onClick = { onAskDelete(outline.id) },
-                        modifier = Modifier.testTag("${TestTags.EditorDelete}_${outline.id}"),
-                    ) { Text("删除") }
-                }
-            }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                ),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onSubmit(text) }),
+            )
         }
     }
 }
 
-/** 保存区：把结果写到内部 + 外部两份配置，并把真实路径显示出来。 */
+/** 右上角绘制模式下拉。 */
 @Composable
-private fun SaveCard(
-    state: EditorUiState,
-    onSave: () -> Unit,
-    onReload: () -> Unit,
-) {
-    NavCard(modifier = Modifier.testTag(TestTags.EditorSaveCard)) {
-        SectionLabel(text = "保存", dotColor = NavColors.Brand)
+private fun ModeDropdown(current: EditorMode, onSelect: (EditorMode) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
 
-        Row(
+    Box {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = NavColors.Card,
+            shadowElevation = 6.dp,
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .clip(RoundedCornerShape(24.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { expanded = true }
+                .testTag(TestTags.EditorModeDropdown),
         ) {
-            Button(
-                onClick = onSave,
-                enabled = state.hasSomethingToSave,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag(TestTags.EditorSave),
-            ) { Text("保存并导入") }
-
-            OutlinedButton(
-                onClick = onReload,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag(TestTags.EditorReload),
-            ) { Text("重新加载") }
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    text = current.label,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = NavColors.Brand,
+                )
+                Text(text = "▾", fontSize = 13.sp, color = NavColors.Brand)
+            }
         }
 
-        val save = state.lastSave
-        if (save != null) {
-            Text(
-                text = buildString {
-                    append("内部：")
-                    append(save.internalPath ?: "写入失败")
-                    append("\n外部：")
-                    append(save.externalPath ?: "不可用")
-                },
-                fontSize = 12.sp,
-                color = NavColors.TextSecondary,
-                modifier = Modifier
-                    .padding(top = 10.dp)
-                    .testTag(TestTags.EditorSavePath),
-            )
-            save.warnings.forEach { warning ->
-                Text(
-                    text = "⚠ $warning",
-                    fontSize = 12.sp,
-                    color = NavColors.Green,
-                    modifier = Modifier.padding(top = 4.dp),
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            EditorMode.menuOrder.forEach { mode ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = mode.label,
+                            color = if (mode == current) NavColors.Brand else NavColors.TextPrimary,
+                            fontWeight = if (mode == current) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    },
+                    onClick = {
+                        onSelect(mode)
+                        expanded = false
+                    },
+                    modifier = Modifier.testTag("${TestTags.EditorModeItem}_${mode.name}"),
                 )
             }
         }
-
-        Text(
-            text = "保存后会写入应用私有目录，并同时在外部目录留一份，" +
-                "可用数据线或文件管理器取出。下次启动 App 时自动生效。",
-            fontSize = 12.sp,
-            color = NavColors.TextSecondary,
-            modifier = Modifier.padding(top = 10.dp),
-        )
     }
+}
+
+/** 浮在地图上的圆形工具按钮。 */
+@Composable
+private fun RoundTool(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    testTag: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    Surface(
+        shape = CircleShape,
+        color = NavColors.Card,
+        shadowElevation = 4.dp,
+        modifier = Modifier.size(44.dp),
+    ) {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier.testTag(testTag),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = if (enabled) NavColors.TextPrimary else NavColors.TextSecondary.copy(alpha = 0.5f),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+/** 底部状态条 + 主操作。 */
+@Composable
+private fun BottomBar(
+    state: EditorUiState,
+    onShowList: () -> Unit,
+    onFinish: () -> Unit,
+    onSave: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, bottom = NavBarSpace),
+        shape = MaterialTheme.shapes.medium,
+        color = NavColors.Card,
+        shadowElevation = 6.dp,
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = statusLine(state),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = NavColors.TextPrimary,
+                        modifier = Modifier.testTag(TestTags.EditorDraftHint),
+                    )
+                    Text(
+                        text = "${state.buildings.size} 栋 / " +
+                            "${state.buildings.sumOf { it.elementCount }} 个元素",
+                        fontSize = 11.sp,
+                        color = NavColors.TextSecondary,
+                    )
+                }
+                TextButton(
+                    onClick = onShowList,
+                    modifier = Modifier.testTag(TestTags.EditorOutlineList),
+                ) { Text("清单") }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = onFinish,
+                    enabled = state.canFinishDraft && state.canDraw,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag(TestTags.EditorFinish),
+                ) {
+                    Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text(text = "  成面", fontSize = 14.sp)
+                }
+                Button(
+                    onClick = onSave,
+                    enabled = state.buildings.isNotEmpty(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag(TestTags.EditorSave),
+                ) { Text("保存导入", fontSize = 14.sp) }
+            }
+        }
+    }
+}
+
+/** 一行状态说明，告诉用户「现在在画什么、还差什么」。 */
+private fun statusLine(state: EditorUiState): String = when {
+    !state.canDraw -> "先点「清单」选一栋楼，${state.mode.label}要画在楼里"
+    state.draftPoints.isEmpty() && state.mode == EditorMode.Building ->
+        "点选楼栋拐角，至少 ${EditorUiState.MIN_POLYGON_POINTS} 个点"
+
+    state.draftPoints.isEmpty() ->
+        "在「${state.targetBuilding?.name}」${state.floorLevel} 楼点选${state.mode.label}边界"
+
+    !state.canFinishDraft ->
+        "已选 ${state.draftPoints.size} 个点，还需 ${EditorUiState.MIN_POLYGON_POINTS - state.draftPoints.size} 个"
+
+    else -> "已选 ${state.draftPoints.size} 个点，可以成面"
+}
+
+/** 命名弹窗。成面之后再命名，避免打断绘制节奏。 */
+@Composable
+private fun NameDialog(
+    mode: EditorMode,
+    initial: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var name by rememberSaveable(initial) { mutableStateOf(initial.ifBlank { mode.label }) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("给这个${mode.label}起个名字") },
+        text = {
+            Column {
+                Text(
+                    text = "名字会出现在导航文案里，所以要填真实中文名。",
+                    fontSize = 12.sp,
+                    color = NavColors.TextSecondary,
+                    modifier = Modifier.padding(bottom = 10.dp),
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TestTags.EditorNameField),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(name) },
+                modifier = Modifier.testTag(TestTags.EditorFinishConfirm),
+            ) { Text("确定") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }

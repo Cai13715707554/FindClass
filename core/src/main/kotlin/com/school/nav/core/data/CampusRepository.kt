@@ -215,43 +215,90 @@ class CampusRepository private constructor(
         }
 
         /**
-         * 把编辑器产出的楼栋轮廓合并进一份校园数据。
+         * 把编辑器产出的楼栋合并进一份校园数据。
          *
          * 规则（顺序很重要）：
          *  1. **assets 打底**：内置数据始终是完整的（有楼层、有元素）；
-         *  2. **配置覆盖同名楼栋的几何与名称**：id 相同视为同一栋楼，
-         *     用编辑器画的 `polygon` 替换掉原来的，`name` 若配置里非空也一并替换；
-         *  3. **保留原有楼层**：编辑器当前只画外轮廓，不产出楼层。
-         *     如果这里把 floors 清空，"覆盖"就变成了"把楼废掉"——楼栋定位还能用，
-         *     但楼层与元素全没了，导航直接失效。所以**新轮廓 + 老楼层**才是正确合并；
-         *  4. **新增配置里有、assets 里没有的楼栋**：以空楼层加入，并附一条自检问题，
-         *     提醒数据还不完整（这类楼只能用于楼栋定位，不能导航）。
+         *  2. **配置覆盖同名楼栋**（id 相同视为同一栋楼）：
+         *     - 外轮廓：配置里有合法多边形才覆盖，否则保留原轮廓
+         *       （用户可能只想补画楼层，没重画轮廓）；
+         *     - 楼层与元素：配置里画了才覆盖**该层**，没画的层保留 assets 的；
+         *  3. **新增配置里有、assets 里没有的楼栋**：直接加入。
+         *
+         * 为什么楼层要「按层合并」而不是整栋替换：
+         * 用户通常只在编辑器里画一两层，若整栋替换，其余楼层会被清空 ——
+         * 表现是「楼栋定位还在、那几层导航全废」，而且不会崩，极难发现。
          *
          * 不做原地修改：数据可能被多处以 `StateFlow` 持有，产出新对象更安全。
          */
-        fun mergeEditorBuildings(
-            base: CampusData,
-            outlines: List<BuildingOutline>,
-            minPolygonPoints: Int = MIN_BUILDING_POLYGON_POINTS,
-        ): CampusData {
-            if (outlines.isEmpty()) return base
-
+        fun mergeEditorBuildings(base: CampusData, outlines: List<EditorBuilding>): CampusData {
             val incoming = outlines.associateBy { it.id }
+
             val merged = base.buildings.map { existing ->
-                val outline = incoming[existing.id] ?: return@map existing
-                if (!outline.isValid) return@map existing
-                existing.copy(
-                    name = outline.name.ifBlank { existing.name },
-                    polygon = outline.polygon,
-                )
+                val draft = incoming[existing.id] ?: return@map existing
+                mergeOne(existing, draft)
             }
 
             val added = outlines
-                .filter { it.isValid && base.buildings.none { b -> b.id == it.id } }
-                .map { it.toBuilding(floors = emptyList()) }
+                .filter { draft -> base.buildings.none { b -> b.id == draft.id } }
+                .map { it.toBuilding() }
 
             return base.copy(buildings = merged + added)
         }
+
+        /** 把一份编辑器草稿合并进一栋已有楼栋。 */
+        private fun mergeOne(existing: Building, draft: EditorBuilding): Building {
+            val newPolygon = if (draft.hasValidPolygon) draft.polygon else existing.polygon
+            if (draft.floors.isEmpty()) {
+                // 只改了轮廓 / 或者什么都没画
+                return existing.copy(
+                    name = draft.name.ifBlank { existing.name },
+                    polygon = newPolygon,
+                )
+            }
+
+            // 按层合并：配置里画过的层替换，没画过的层原样保留
+            val draftByLevel = draft.floors.associateBy { it.level }
+            val mergedFloors = existing.floors.map { floor ->
+                val draftFloor = draftByLevel[floor.level] ?: return@map floor
+                val elements = draftFloor.elements.filter { it.isValid }.map { it.toElement() }
+                if (elements.isEmpty()) floor else floor.copy(elements = elements)
+            }
+
+            // assets 里没有的楼层（例如用户新建了一层）也加进来，
+            // 相对高度按「层号差 × 假定层高」估算，保证递增关系成立
+            val existingLevels = existing.floors.map { it.level }.toSet()
+            val extraFloors = draft.floors
+                .filter { it.level !in existingLevels }
+                .mapNotNull { draftFloor ->
+                    val elements = draftFloor.elements.filter { it.isValid }.map { it.toElement() }
+                    if (elements.isEmpty()) {
+                        null
+                    } else {
+                        Floor(
+                            id = "${existing.id}_${draftFloor.level}F",
+                            level = draftFloor.level,
+                            relativeHeightM = draftFloor.level * ASSUMED_FLOOR_HEIGHT_M,
+                            elements = elements,
+                        )
+                    }
+                }
+
+            return existing.copy(
+                name = draft.name.ifBlank { existing.name },
+                polygon = newPolygon,
+                floors = (mergedFloors + extraFloors).sortedBy { it.level },
+            )
+        }
+
+        /**
+         * 编辑器新增楼层时假定的层高（米）。
+         *
+         * 是估算值：编辑器只画平面位置，不测高度。用户要精确值应当回 assets
+         * 或后续版本的编辑器里改。留这个常量是为了让 `relative_height_m`
+         * 保持递增，否则楼层自检会报错、气压计判层也会错。
+         */
+        const val ASSUMED_FLOOR_HEIGHT_M = 4.0
 
         /** 楼栋多边形至少需要几个点（少于 3 个点围不成面）。 */
         const val MIN_BUILDING_POLYGON_POINTS = 3
@@ -281,22 +328,24 @@ class CampusRepository private constructor(
 
             val warnings = mutableListOf<String>()
 
-            // 只保留有效轮廓：画歪了 / 少于三个点的直接丢掉，并说清楚丢了几条
-            val valid = editorConfig.buildings.filter { it.isValid }
-            val dropped = editorConfig.buildings.size - valid.size
+            // 只保留「能用的」草稿：轮廓必须合法；若完全没有楼层元素，
+            // 至少要有合法轮廓，否则这条草稿什么也贡献不了，直接丢掉并说明。
+            val usable = editorConfig.buildings.filter { it.hasValidPolygon || it.elementCount > 0 }
+            val dropped = editorConfig.buildings.size - usable.size
             if (dropped > 0) {
-                warnings += "编辑器配置里有 $dropped 个楼栋轮廓无效（少于 3 个点或点重合），已忽略。"
+                warnings += "编辑器配置里有 $dropped 栋既没有合法外轮廓、也没有任何元素，已忽略。"
             }
 
-            val merged = mergeEditorBuildings(base, valid)
+            val merged = mergeEditorBuildings(base, usable)
 
-            // 新加入的楼栋还没有楼层：楼栋定位能用，但导航用不了，必须提示
-            val newBuildings = merged.buildings.filter { b ->
-                valid.any { it.id == b.id } && base.buildings.none { it.id == b.id }
+            // 新加入的楼栋若还没有任何楼层元素，楼栋定位能用但导航用不了，必须提示
+            val incomplete = merged.buildings.filter { b ->
+                usable.any { it.id == b.id } && base.buildings.none { it.id == b.id } &&
+                    b.floors.none { it.elements.isNotEmpty() }
             }
-            if (newBuildings.isNotEmpty()) {
-                warnings += newBuildings.joinToString("、") { it.name } +
-                    " 只有外轮廓、还没有楼层数据，暂时不能用于室内导航。"
+            if (incomplete.isNotEmpty()) {
+                warnings += incomplete.joinToString("、") { it.name } +
+                    " 只有外轮廓、还没有楼层元素，暂时只能用于楼栋定位、不能室内导航。"
             }
 
             return Merged(
@@ -305,7 +354,7 @@ class CampusRepository private constructor(
                     jsonParser = jsonParser,
                     mergeWarnings = warnings,
                 ),
-                editorConfig = editorConfig.copy(buildings = valid),
+                editorConfig = editorConfig.copy(buildings = usable),
                 warnings = warnings,
             )
         }
