@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与 Demo 保持一致的蓝色主色 -->
+    <color name="brand_primary">#2F6BFF</color>
+    <color name="brand_primary_dark">#2059E0</color>
+    <color name="brand_green">#16B364</color>
+    <color name="surface_page">#EEF1F6</color>
+    <color name="surface_card">#FFFFFF</color>
+    <color name="text_primary">#1A1D24</color>
+    <color name="text_secondary">#8A90A0</color>
+    <color name="divider">#E2E7F0</color>
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+</resources>

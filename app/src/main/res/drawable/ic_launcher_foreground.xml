@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  启动图标前景：一个简单的“楼层 + 定位点”符号。
+  用矢量图而不是位图，APK 里不需要维护多套 PNG。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 楼体 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,32 h32 v44 h-32 z" />
+
+    <!-- 楼层分隔线 -->
+    <path
+        android:fillColor="#2F6BFF"
+        android:pathData="M38,44 h32 v3 h-32 z" />
+    <path
+        android:fillColor="#2F6BFF"
+        android:pathData="M38,56 h32 v3 h-32 z" />
+    <path
+        android:fillColor="#2F6BFF"
+        android:pathData="M38,68 h32 v3 h-32 z" />
+
+    <!-- 定位点（目标教室） -->
+    <path
+        android:fillColor="#16B364"
+        android:pathData="M54,47 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0 z" />
+</vector>

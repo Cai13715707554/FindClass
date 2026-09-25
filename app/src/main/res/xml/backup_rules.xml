@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- 只备份用户位置修正与气压基准，楼栋数据是静态资源不需要备份 -->
+    <include domain="sharedpref" path="." />
+</full-backup-content>

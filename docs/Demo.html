@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>校园教学楼导航 · MVP</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #eef1f6;
+    color: #1a1d24;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 24px 12px 48px;
+  }
+  .app { width: 100%; max-width: 440px; }
+
+  .header { text-align: center; margin-bottom: 20px; }
+  .header h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.5px; }
+  .header p { font-size: 12px; color: #8a90a0; margin-top: 6px; }
+
+  .card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 12px rgba(20, 30, 60, 0.06);
+  }
+
+  .label {
+    font-size: 12px;
+    color: #8a90a0;
+    letter-spacing: 0.6px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .label .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #2f6bff;
+  }
+  .label.green .dot { background: #16b364; }
+
+  .value {
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.45;
+    margin-bottom: 14px;
+  }
+  .value .sep { color: #c7cddb; margin: 0 2px; }
+
+  .actions { display: flex; gap: 8px; }
+
+  button {
+    font-family: inherit;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.05s;
+  }
+  button:active { transform: scale(0.97); }
+  .btn-primary { background: #2f6bff; color: #fff; flex: 1; }
+  .btn-primary:hover { background: #2059e0; }
+  .btn-ghost { background: #eef1f7; color: #4a5164; flex: 1; }
+  .btn-ghost:hover { background: #e2e7f0; }
+
+  .search-row { display: flex; gap: 8px; }
+  input[type="text"] {
+    flex: 1;
+    padding: 11px 14px;
+    border: 1.5px solid #e2e7f0;
+    border-radius: 10px;
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+    background: #fafbfd;
+  }
+  input[type="text"]:focus { border-color: #2f6bff; background: #fff; }
+  input[type="text"]::placeholder { color: #a8afbf; }
+
+  .quick {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .quick button {
+    background: #eef1f7;
+    color: #4a5164;
+    font-size: 13px;
+    padding: 7px 13px;
+    border-radius: 20px;
+    font-weight: 400;
+  }
+  .quick button:hover { background: #e2e7f0; color: #2f6bff; }
+
+  .route-text {
+    font-size: 16px;
+    line-height: 1.9;
+    color: #1a1d24;
+    word-break: break-all;
+  }
+  .route-text .hl { color: #2f6bff; font-weight: 600; }
+  .route-text .step { display: block; margin-bottom: 4px; }
+
+  .empty { color: #a8afbf; font-size: 14px; line-height: 1.6; }
+
+  /* 弹层 */
+  .modal-bg {
+    position: fixed; inset: 0;
+    background: rgba(20, 30, 60, 0.42);
+    display: none;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 100;
+    backdrop-filter: blur(2px);
+  }
+  .modal-bg.show { display: flex; }
+  .modal {
+    background: #fff;
+    width: 100%;
+    max-width: 440px;
+    border-radius: 22px 22px 0 0;
+    padding: 22px 18px 28px;
+    animation: slideUp 0.22s ease-out;
+  }
+  @keyframes slideUp {
+    from { transform: translateY(24px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  .modal h2 { font-size: 17px; margin-bottom: 18px; }
+  .field { margin-bottom: 14px; }
+  .field label { font-size: 13px; color: #6b7280; display: block; margin-bottom: 7px; }
+  .field select {
+    width: 100%;
+    padding: 11px 12px;
+    border: 1.5px solid #e2e7f0;
+    border-radius: 10px;
+    font-size: 15px;
+    font-family: inherit;
+    background: #fafbfd;
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238a90a0' stroke-width='1.8' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+  }
+  .field select:focus { border-color: #2f6bff; }
+  .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+
+  .toast {
+    position: fixed; bottom: 40px; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: #1a1d24; color: #fff;
+    padding: 10px 18px; border-radius: 20px;
+    font-size: 13px; opacity: 0; pointer-events: none;
+    transition: all 0.25s; z-index: 200;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .locating {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid #e2e7f0;
+    border-top-color: #2f6bff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -2px;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="header">
+    <h1>校园教学楼导航</h1>
+    <p>MVP 演示 · GPS 判楼栋 · 高度判楼层 · 文字导航</p>
+  </div>
+
+  <!-- 当前位置 -->
+  <div class="card">
+    <div class="label"><span class="dot"></span>当前位置</div>
+    <div class="value" id="curValue">定位中…</div>
+    <div class="actions">
+      <button class="btn-ghost" id="btnEdit">修改位置</button>
+      <button class="btn-ghost" id="btnRelocate">重新定位</button>
+    </div>
+  </div>
+
+  <!-- 目标 -->
+  <div class="card">
+    <div class="label green"><span class="dot"></span>要去哪里</div>
+    <div class="search-row">
+      <input type="text" id="searchInput" placeholder="输入教室名，如 物理实验室">
+      <button class="btn-primary" id="btnSearch" style="flex:0 0 auto;">导航</button>
+    </div>
+    <div class="quick" id="quickList"></div>
+  </div>
+
+  <!-- 导航结果 -->
+  <div class="card" id="routeCard" style="display:none;">
+    <div class="label green"><span class="dot"></span>导航指令</div>
+    <div class="route-text" id="routeText"></div>
+  </div>
+</div>
+
+<!-- 修改位置弹层 -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h2>修改当前位置</h2>
+    <div class="field">
+      <label>教学楼</label>
+      <select id="selBuilding"></select>
+    </div>
+    <div class="field">
+      <label>楼层</label>
+      <select id="selFloor"></select>
+    </div>
+    <div class="field">
+      <label>当前位置</label>
+      <select id="selElement"></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btnCancel">取消</button>
+      <button class="btn-primary" id="btnConfirm">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   一、坐标工具
+   ============================================================ */
+const DEG_PER_M_LAT = 1 / 110574;
+const DEG_PER_M_LNG = 1 / (111320 * Math.cos(23 * Math.PI / 180));
+
+// 局部米坐标 → 经纬度
+function ll(origin, xM, yM) {
+  return [
+    +(origin.lng + xM * DEG_PER_M_LNG).toFixed(7),
+    +(origin.lat + yM * DEG_PER_M_LAT).toFixed(7)
+  ];
+}
+// 矩形：四个角
+function rect(origin, x1, y1, x2, y2) {
+  return [ll(origin, x1, y1), ll(origin, x2, y1), ll(origin, x2, y2), ll(origin, x1, y2)];
+}
+// 质心（经纬度）
+function centroid(points) {
+  let sx = 0, sy = 0;
+  for (const p of points) { sx += p[0]; sy += p[1]; }
+  return [sx / points.length, sy / points.length];
+}
+
+/* ============================================================
+   二、数据（模拟两栋楼，实际可由外部 JSON 替换）
+   ============================================================ */
+const A_ORIGIN = { lng: 113.12340, lat: 23.12340 };
+const B_ORIGIN = { lng: 113.12440, lat: 23.12340 };
+
+// 北侧一排教室：5 间，每间 8m 宽，y 从 1 到 9
+function northRow(origin, names) {
+  return names.map((name, i) => {
+    const x1 = -20 + i * 8;
+    return {
+      type: 'room',
+      name,
+      side: 'north',
+      points: rect(origin, x1, 1, x1 + 8, 9)
+    };
+  });
+}
+
+// 南侧元素：依次从左往右排，从 x=-26 开始
+function southRow(origin, items) {
+  let x = -26;
+  return items.map(it => {
+    const w = it.width;
+    const isEntrance = it.type === 'entrance';
+    const y1 = isEntrance ? 1 : -1;
+    const y2 = isEntrance ? -1 : -9;
+    const el = {
+      type: it.type,
+      name: it.name,
+      side: 'south',
+      points: rect(origin, x, y2, x + w, y1)
+    };
+    x += w;
+    return el;
+  });
+}
+
+let _eid = 0;
+function buildFloor(origin, floorId, level, height, northNames, southItems) {
+  const raw = [
+    ...northRow(origin, northNames),
+    ...southRow(origin, southItems)
+  ];
+  return {
+    id: floorId,
+    level,
+    relative_height_m: height,
+    elements: raw.map(el => ({ id: `${floorId}_e${_eid++}`, ...el }))
+  };
+}
+
+const DATA = {
+  buildings: [
+    {
+      id: 'A',
+      name: 'A栋',
+      polygon: [
+        ll(A_ORIGIN, -30, -12), ll(A_ORIGIN, 30, -12),
+        ll(A_ORIGIN, 30, 12),   ll(A_ORIGIN, -30, 12)
+      ],
+      floors: [
+        buildFloor(A_ORIGIN, 'A_1F', 1, 0,
+          ['语文教研室', '数学教研室', '英语教研室', '历史教研室', '地理教研室'],
+          [
+            { name: '南门',       type: 'entrance', width: 4 },
+            { name: '东楼梯口',   type: 'stair',    width: 4 },
+            { name: '计算机房',   type: 'room',     width: 8 },
+            { name: '多媒体教室', type: 'room',     width: 8 },
+            { name: '语音教室',   type: 'room',     width: 8 },
+            { name: '电梯口',     type: 'elevator', width: 4 }
+          ]),
+        buildFloor(A_ORIGIN, 'A_2F', 2, 4,
+          ['物理实验室', '化学实验室', '生物实验室', '科学探究室', '创客空间'],
+          [
+            { name: '东楼梯口',   type: 'stair',    width: 4 },
+            { name: '音乐教室',   type: 'room',     width: 8 },
+            { name: '美术教室',   type: 'room',     width: 8 },
+            { name: '书法教室',   type: 'room',     width: 8 },
+            { name: '电梯口',     type: 'elevator', width: 4 }
+          ]),
+        buildFloor(A_ORIGIN, 'A_3F', 3, 8,
+          ['高一(1)班', '高一(2)班', '高一(3)班', '高一(4)班', '高一(5)班'],
+          [
+            { name: '东楼梯口',   type: 'stair',    width: 4 },
+            { name: '高一(6)班',  type: 'room',     width: 8 },
+            { name: '高一(7)班',  type: 'room',     width: 8 },
+            { name: '教务处',     type: 'office',   width: 8 },
+            { name: '电梯口',     type: 'elevator', width: 4 }
+          ])
+      ]
+    },
+    {
+      id: 'B',
+      name: 'B栋',
+      polygon: [
+        ll(B_ORIGIN, -30, -12), ll(B_ORIGIN, 30, -12),
+        ll(B_ORIGIN, 30, 12),   ll(B_ORIGIN, -30, 12)
+      ],
+      floors: [
+        buildFloor(B_ORIGIN, 'B_1F', 1, 0,
+          ['报告厅', '接待室', '校史馆'],
+          [
+            { name: '西门',     type: 'entrance', width: 4 },
+            { name: '西楼梯口', type: 'stair',    width: 4 },
+            { name: '值班室',   type: 'office',   width: 8 },
+            { name: '电梯口',   type: 'elevator', width: 4 }
+          ]),
+        buildFloor(B_ORIGIN, 'B_2F', 2, 4,
+          ['图书馆', '阅览室', '电子阅览室'],
+          [
+            { name: '西楼梯口', type: 'stair',    width: 4 },
+            { name: '自习室',   type: 'room',     width: 8 },
+            { name: '研讨室',   type: 'room',     width: 8 },
+            { name: '电梯口',   type: 'elevator', width: 4 }
+          ])
+      ]
+    }
+  ]
+};
+
+/* ============================================================
+   三、定位模块（demo 里模拟 GPS + 气压计）
+   ============================================================ */
+function defaultLocation() {
+  // 模拟：用户站在 A 栋 3 楼，靠近高一(1)班
+  const b = DATA.buildings[0];
+  const f = b.floors[2];
+  // 取最靠西的教室作为默认位置
+  const sorted = sortElements(f.elements);
+  const el = sorted.find(e => e.type === 'room') || sorted[0];
+  return { building: b, floor: f, element: el };
+}
+
+function sortElements(elements) {
+  return [...elements].sort((a, b) => {
+    const ca = centroid(a.points), cb = centroid(b.points);
+    if (Math.abs(ca[0] - cb[0]) > 1e-7) return ca[0] - cb[0];
+    return cb[1] - ca[1]; // 北侧优先
+  });
+}
+
+function findStair(floor) {
+  return floor.elements.find(e => e.type === 'stair') || floor.elements[0];
+}
+
+/* ============================================================
+   四、导航模块
+   ============================================================ */
+function sameFloorRoute(from, to, floor, prefix) {
+  const sorted = sortElements(floor.elements);
+  const fi = sorted.findIndex(e => e.id === from.id);
+  const ti = sorted.findIndex(e => e.id === to.id);
+
+  if (fi === -1 || ti === -1) return prefix + '位置信息有误。';
+  if (fi === ti) return prefix + `你已经在 ${to.name} 了。`;
+
+  const eastward = ti > fi;
+  const between = eastward
+    ? sorted.slice(fi + 1, ti)
+    : sorted.slice(ti + 1, fi).reverse();
+
+  const dirText = eastward ? '沿走廊向东走' : '沿走廊向西走';
+
+  let midText = '';
+  if (between.length > 0) {
+    if (between.length <= 4) {
+      midText = `经过${between.map(e => e.name).join('、')}，`;
+    } else {
+      midText = `经过${between[0].name}等 ${between.length} 个位置，`;
+    }
+  }
+
+  let handText = '';
+  if (to.side === 'north') handText = eastward ? '右手边' : '左手边';
+  else if (to.side === 'south') handText = eastward ? '左手边' : '右手边';
+
+  if (handText) {
+    return `${prefix}${dirText}，${midText}目标<strong>${to.name}</strong>在${handText}。`;
+  }
+  return `${prefix}${dirText}，${midText}目标<strong>${to.name}</strong>就在前方。`;
+}
+
+function buildRoute(cur, tgt) {
+  const cb = cur.building, cf = cur.floor, ce = cur.element;
+  const tb = tgt.building, tf = tgt.floor, te = tgt.element;
+
+  // 同楼同层
+  if (cb.id === tb.id && cf.id === tf.id) {
+    return `<span class="step">${sameFloorRoute(ce, te, cf, '从当前位置出发，')}</span>`;
+  }
+
+  // 同楼跨层
+  if (cb.id === tb.id) {
+    const stairCur = findStair(cf);
+    const stairTgt = findStair(tf);
+    const dir = tf.level > cf.level ? '上' : '下';
+    const p1 = `先走到${stairCur.name}，${dir}到 ${tf.level} 楼。`;
+    const p2 = sameFloorRoute(stairTgt, te, tf, '出楼梯后，');
+    return `<span class="step">${p1}</span><span class="step">${p2}</span>`;
+  }
+
+  // 跨楼
+  const stairTgt = findStair(tf);
+  const dir = tf.level > cf.level ? '上' : '下';
+  const p1 = `先出${cb.name}，前往${tb.name}，进楼后${dir}到 ${tf.level} 楼。`;
+  const p2 = sameFloorRoute(stairTgt, te, tf, '出楼梯后，');
+  return `<span class="step">${p1}</span><span class="step">${p2}</span>`;
+}
+
+/* ============================================================
+   五、状态与渲染
+   ============================================================ */
+const state = {
+  building: null,
+  floor: null,
+  element: null,
+  target: null
+};
+
+function el(id) { return document.getElementById(id); }
+
+function renderCurrent() {
+  if (!state.building) {
+    el('curValue').innerHTML = '<span class="locating"></span>定位中…';
+    return;
+  }
+  el('curValue').innerHTML =
+    `${state.building.name}<span class="sep">·</span>` +
+    `${state.floor.level}楼<span class="sep">·</span>` +
+    `<span style="color:#2f6bff">${state.element.name}</span>`;
+}
+
+function showToast(msg) {
+  const t = el('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+/* 快捷目标 */
+const QUICK_TARGETS = ['物理实验室', '教务处', '高一(6)班', '图书馆', '报告厅'];
+
+function renderQuick() {
+  el('quickList').innerHTML = QUICK_TARGETS
+    .map(n => `<button data-name="${n}">${n}</button>`)
+    .join('');
+  el('quickList').querySelectorAll('button').forEach(b => {
+    b.onclick = () => {
+      el('searchInput').value = b.dataset.name;
+      doSearch(b.dataset.name);
+    };
+  });
+}
+
+/* 全局搜索：找到名字匹配的元素 */
+function findElementByName(name) {
+  const key = name.trim();
+  if (!key) return null;
+  for (const b of DATA.buildings) {
+    for (const f of b.floors) {
+      for (const e of f.elements) {
+        if (e.name === key) return { building: b, floor: f, element: e };
+      }
+    }
+  }
+  // 模糊匹配
+  for (const b of DATA.buildings) {
+    for (const f of b.floors) {
+      for (const e of f.elements) {
+        if (e.name.includes(key)) return { building: b, floor: f, element: e };
+      }
+    }
+  }
+  return null;
+}
+
+function doSearch(name) {
+  const tgt = findElementByName(name);
+  if (!tgt) {
+    showToast('没找到这个位置');
+    return;
+  }
+  state.target = tgt;
+  const html = buildRoute(
+    { building: state.building, floor: state.floor, element: state.element },
+    tgt
+  );
+  el('routeText').innerHTML = html;
+  el('routeCard').style.display = 'block';
+  el('routeCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/* ============================================================
+   六、修改位置弹层
+   ============================================================ */
+function openModal() {
+  const sb = el('selBuilding');
+  sb.innerHTML = DATA.buildings.map(b =>
+    `<option value="${b.id}" ${b.id === state.building.id ? 'selected' : ''}>${b.name}</option>`
+  ).join('');
+  refreshFloorSelect();
+  el('modalBg').classList.add('show');
+}
+
+function refreshFloorSelect() {
+  const bid = el('selBuilding').value;
+  const b = DATA.buildings.find(x => x.id === bid);
+  const sf = el('selFloor');
+  sf.innerHTML = b.floors.map(f =>
+    `<option value="${f.id}" ${state.floor && f.id === state.floor.id ? 'selected' : ''}>${f.level}楼</option>`
+  ).join('');
+  refreshElementSelect();
+}
+
+function refreshElementSelect() {
+  const bid = el('selBuilding').value;
+  const b = DATA.buildings.find(x => x.id === bid);
+  const fid = el('selFloor').value;
+  const f = b.floors.find(x => x.id === fid);
+  const se = el('selElement');
+  se.innerHTML = f.elements.map(e =>
+    `<option value="${e.id}" ${state.element && e.id === state.element.id ? 'selected' : ''}>${e.name}</option>`
+  ).join('');
+}
+
+function confirmModal() {
+  const bid = el('selBuilding').value;
+  const fid = el('selFloor').value;
+  const eid = el('selElement').value;
+  const b = DATA.buildings.find(x => x.id === bid);
+  const f = b.floors.find(x => x.id === fid);
+  const e = f.elements.find(x => x.id === eid);
+
+  state.building = b;
+  state.floor = f;
+  state.element = e;
+
+  renderCurrent();
+  el('modalBg').classList.remove('show');
+
+  // 如果已有目标，重新计算
+  if (state.target) {
+    const html = buildRoute(
+      { building: b, floor: f, element: e },
+      state.target
+    );
+    el('routeText').innerHTML = html;
+  }
+  showToast('位置已更新');
+}
+
+/* ============================================================
+   七、初始化
+   ============================================================ */
+function init() {
+  // 模拟定位：显示 loading，延迟后出现结果
+  state.building = null;
+  renderCurrent();
+
+  setTimeout(() => {
+    const loc = defaultLocation();
+    state.building = loc.building;
+    state.floor = loc.floor;
+    state.element = loc.element;
+    renderCurrent();
+  }, 900);
+
+  renderQuick();
+
+  // 事件
+  el('btnEdit').onclick = openModal;
+  el('btnRelocate').onclick = () => {
+    state.building = null;
+    renderCurrent();
+    el('routeCard').style.display = 'none';
+    state.target = null;
+    setTimeout(() => {
+      const loc = defaultLocation();
+      state.building = loc.building;
+      state.floor = loc.floor;
+      state.element = loc.element;
+      renderCurrent();
+      showToast('已重新定位');
+    }, 800);
+  };
+
+  el('btnSearch').onclick = () => doSearch(el('searchInput').value);
+  el('searchInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doSearch(e.target.value);
+  });
+
+  el('selBuilding').onchange = refreshFloorSelect;
+  el('selFloor').onchange = refreshElementSelect;
+  el('btnCancel').onclick = () => el('modalBg').classList.remove('show');
+  el('btnConfirm').onclick = confirmModal;
+  el('modalBg').onclick = e => {
+    if (e.target === el('modalBg')) el('modalBg').classList.remove('show');
+  };
+}
+
+init();
+</script>
+</body>
+</html>

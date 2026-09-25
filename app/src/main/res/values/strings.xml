@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">校园教学楼导航</string>
+
+    <!-- 位置卡片 -->
+    <string name="label_current_position">当前位置</string>
+    <string name="action_edit_position">修改位置</string>
+    <string name="action_relocate">重新定位</string>
+    <string name="state_locating">定位中…</string>
+    <string name="state_floor_unknown">楼层待确认</string>
+    <string name="state_position_unknown">尚未定位</string>
+
+    <!-- 目标 -->
+    <string name="label_destination">要去哪里</string>
+    <string name="hint_search">输入教室名，如 物理实验室</string>
+    <string name="action_navigate">导航</string>
+    <string name="label_quick_targets">快捷目标</string>
+
+    <!-- 导航结果 -->
+    <string name="label_route">导航指令</string>
+    <string name="route_empty">先用上面的搜索框选一个目标。</string>
+
+    <!-- 修改位置 -->
+    <string name="title_edit_position">修改当前位置</string>
+    <string name="field_building">教学楼</string>
+    <string name="field_floor">楼层</string>
+    <string name="field_element">当前位置</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_confirm">确定</string>
+    <string name="edit_hint_manual">手动修改后不会被自动定位覆盖，点“重新定位”才会重新采用 GPS 和气压计。</string>
+
+    <!-- 提示 -->
+    <string name="toast_target_not_found">没找到这个位置</string>
+    <string name="toast_position_updated">位置已更新</string>
+    <string name="toast_relocated">已重新定位</string>
+    <string name="toast_pick_target_first">请先选择目标</string>
+    <string name="toast_need_floor">还不知道你在几楼，请先手动选择楼层</string>
+    <string name="toast_location_permission_denied">没有定位权限，请手动选择当前位置</string>
+
+    <!-- 定位状态说明 -->
+    <string name="locate_source_gps">GPS 已锁定楼栋</string>
+    <string name="locate_source_last_locked">室内信号弱，沿用上次楼栋</string>
+    <string name="locate_source_manual">手动指定位置</string>
+    <string name="locate_sensor_missing">本机没有气压计，请手动选择楼层</string>
+    <string name="locate_sensor_calibrating">正在读取气压计…</string>
+
+    <!-- 搜索 -->
+    <string name="search_section_same_floor">本层</string>
+    <string name="search_section_same_building">本楼</string>
+    <string name="search_section_other">其他楼栋</string>
+
+    <!-- 无障碍 -->
+    <string name="cd_route_card">导航指令卡片</string>
+</resources>
