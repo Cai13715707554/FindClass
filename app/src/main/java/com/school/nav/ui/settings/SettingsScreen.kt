@@ -50,8 +50,11 @@ import com.school.nav.ui.theme.NavColors
 @Composable
 fun SettingsScreen(
     currentKey: String,
+    currentWebKey: String,
     onSaveKey: (String) -> Unit,
     onClearKey: () -> Unit,
+    onSaveWebKey: (String) -> Unit,
+    onClearWebKey: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(
@@ -63,6 +66,7 @@ fun SettingsScreen(
 ) {
     // 用 Key 做 remember 的输入：外部清空后输入框要跟着清空
     var input by rememberSaveable(currentKey) { mutableStateOf(currentKey) }
+    var webInput by rememberSaveable(currentWebKey) { mutableStateOf(currentWebKey) }
     var visible by rememberSaveable { mutableStateOf(false) }
 
     Column(
@@ -88,71 +92,59 @@ fun SettingsScreen(
             ) { Text("返回") }
         }
 
-        NavCard {
-            SectionLabel(text = "高德地图 Key")
+        // ---- 地图 Key（Android 平台）----
+        KeyCard(
+            title = "高德地图 Key",
+            platform = "服务平台选「Android 平台」",
+            purpose = "地图渲染与定位。没填地图页会显示引导，不会白屏。",
+            currentKey = currentKey,
+            input = input,
+            visible = visible,
+            testTagField = TestTags.SettingsKeyField,
+            testTagSave = TestTags.SettingsSaveKey,
+            testTagClear = TestTags.SettingsClearKey,
+            testTagState = TestTags.SettingsKeyState,
+            onInputChange = { input = it },
+            onToggleVisible = { visible = !visible },
+            onSave = { onSaveKey(input) },
+            onClear = {
+                input = ""
+                onClearKey()
+            },
+        )
 
+        // ---- 搜索 Key（Web 服务）----
+        KeyCard(
+            title = "高德搜索 Key（可选，强烈建议）",
+            platform = "服务平台选「Web服务」",
+            purpose = "POI 模糊搜索。填了之后搜索能容忍少写字、同音字；" +
+                "不填则退回系统地理编码，必须写全名且不能有同音字。",
+            currentKey = currentWebKey,
+            input = webInput,
+            visible = visible,
+            testTagField = TestTags.SettingsWebKeyField,
+            testTagSave = TestTags.SettingsSaveWebKey,
+            testTagClear = TestTags.SettingsClearWebKey,
+            testTagState = TestTags.SettingsWebKeyState,
+            onInputChange = { webInput = it },
+            onToggleVisible = { visible = !visible },
+            onSave = { onSaveWebKey(webInput) },
+            onClear = {
+                webInput = ""
+                onClearWebKey()
+            },
+        )
+
+        NavCard {
+            SectionLabel(text = "两个 Key 为什么要分开")
             Text(
-                text = if (currentKey.isBlank()) {
-                    "当前未配置。地图编辑器需要 Key 才能显示地图。"
-                } else {
-                    "当前已配置：${maskKey(currentKey)}"
-                },
+                text = "高德的 Key 按「服务平台」区分用途，**Android 平台的 Key 不能用于 Web 服务**，" +
+                    "反之也一样。所以地图用一个、搜索用一个，各建一个即可（同一个应用下可以建多个 Key）。\n\n" +
+                    "建 Key 时服务平台选错，会报 INVALID_USER_KEY —— 那不是 Key 失效，是类型不对。",
                 fontSize = 13.sp,
                 color = NavColors.TextSecondary,
-                modifier = Modifier
-                    .padding(top = 8.dp, bottom = 10.dp)
-                    .testTag(TestTags.SettingsKeyState),
+                modifier = Modifier.padding(top = 8.dp),
             )
-
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag(TestTags.SettingsKeyField),
-                singleLine = true,
-                label = { Text("粘贴高德 Key") },
-                shape = MaterialTheme.shapes.small,
-                visualTransformation = if (visible) {
-                    VisualTransformation.None
-                } else {
-                    PasswordVisualTransformation()
-                },
-                trailingIcon = {
-                    Text(
-                        text = if (visible) "隐藏" else "显示",
-                        fontSize = 13.sp,
-                        color = NavColors.Brand,
-                        modifier = Modifier
-                            .padding(end = 12.dp)
-                            .clickableText { visible = !visible },
-                    )
-                },
-            )
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(
-                    onClick = { onSaveKey(input) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag(TestTags.SettingsSaveKey),
-                ) { Text("保存") }
-
-                OutlinedButton(
-                    onClick = {
-                        input = ""
-                        onClearKey()
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag(TestTags.SettingsClearKey),
-                ) { Text("清除") }
-            }
         }
 
         NavCard {
@@ -160,11 +152,11 @@ fun SettingsScreen(
             Text(
                 text = "1. 打开高德开放平台（lbs.amap.com）并登录\n" +
                     "2. 控制台 → 应用管理 → 创建应用\n" +
-                    "3. 添加 Key，服务平台选「Android 平台」\n" +
-                    "4. 填入本应用的包名与签名 SHA1\n" +
-                    "5. 把生成的 Key 粘到上面保存\n\n" +
-                    "注意：debug 与 release 签名不同，两个包名/签名都要各自添加，" +
-                    "否则会报 INVALID_USER_KEY。",
+                    "3. 添加 Key：地图选「Android 平台」（填包名 + 签名 SHA1）；" +
+                    "搜索选「Web服务」（不需要包名）\n" +
+                    "4. 把两个 Key 分别粘到上面保存\n\n" +
+                    "注意：debug 与 release 签名不同，两个签名都要各自添加，" +
+                    "否则地图会报 INVALID_USER_KEY。",
                 fontSize = 13.sp,
                 color = NavColors.TextSecondary,
                 modifier = Modifier.padding(top = 8.dp),
@@ -180,6 +172,101 @@ fun SettingsScreen(
                 color = NavColors.TextSecondary,
                 modifier = Modifier.padding(top = 8.dp),
             )
+        }
+    }
+}
+
+/** 一个 Key 的输入卡片。地图 Key 与搜索 Key 结构相同，抽出来避免两处重复。 */
+@Composable
+private fun KeyCard(
+    title: String,
+    platform: String,
+    purpose: String,
+    currentKey: String,
+    input: String,
+    visible: Boolean,
+    testTagField: String,
+    testTagSave: String,
+    testTagClear: String,
+    testTagState: String,
+    onInputChange: (String) -> Unit,
+    onToggleVisible: () -> Unit,
+    onSave: () -> Unit,
+    onClear: () -> Unit,
+) {
+    NavCard {
+        SectionLabel(text = title)
+
+        Text(
+            text = "服务平台：$platform",
+            fontSize = 12.sp,
+            color = NavColors.Brand,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        Text(
+            text = purpose,
+            fontSize = 12.sp,
+            color = NavColors.TextSecondary,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        Text(
+            text = if (currentKey.isBlank()) {
+                "当前未配置"
+            } else {
+                "当前已配置：${maskKey(currentKey)}"
+            },
+            fontSize = 13.sp,
+            color = NavColors.TextSecondary,
+            modifier = Modifier
+                .padding(top = 8.dp, bottom = 10.dp)
+                .testTag(testTagState),
+        )
+
+        OutlinedTextField(
+            value = input,
+            onValueChange = onInputChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(testTagField),
+            singleLine = true,
+            label = { Text("粘贴 Key") },
+            shape = MaterialTheme.shapes.small,
+            visualTransformation = if (visible) {
+                VisualTransformation.None
+            } else {
+                PasswordVisualTransformation()
+            },
+            trailingIcon = {
+                Text(
+                    text = if (visible) "隐藏" else "显示",
+                    fontSize = 13.sp,
+                    color = NavColors.Brand,
+                    modifier = Modifier
+                        .padding(end = 12.dp)
+                        .clickableText(onToggleVisible),
+                )
+            },
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = onSave,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(testTagSave),
+            ) { Text("保存") }
+
+            OutlinedButton(
+                onClick = onClear,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(testTagClear),
+            ) { Text("清除") }
         }
     }
 }

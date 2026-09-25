@@ -45,6 +45,8 @@ const val MAX_FLOOR_COUNT: Int = 100
 data class EditorUiState(
     val hasApiKey: Boolean = false,
     val apiKey: String = "",
+    /** 高德「Web服务」Key：POI 模糊搜索用；没填时搜索退回 Android Geocoder。 */
+    val webKey: String = "",
 
     // ---- 绘制模式 ----
     val mode: EditorMode = EditorMode.Building,
@@ -130,6 +132,7 @@ class MapEditorViewModel(
         EditorUiState(
             hasApiKey = apiKeyStore.hasAmapKey(),
             apiKey = apiKeyStore.amapKey(),
+            webKey = apiKeyStore.amapWebKey(),
             buildings = configStore.load().buildings,
         ),
     )
@@ -471,11 +474,30 @@ class MapEditorViewModel(
         emit("已清除高德 Key")
     }
 
+    /** 保存 Web服务 Key（POI 搜索用）。 */
+    fun saveWebKey(key: String) {
+        val trimmed = key.trim()
+        if (trimmed.isEmpty()) {
+            emit("Web服务 Key 不能为空")
+            return
+        }
+        apiKeyStore.saveAmapWebKey(trimmed)
+        _uiState.value = _uiState.value.copy(webKey = trimmed)
+        emit("已保存 Web服务 Key，搜索将使用高德 POI 模糊匹配")
+    }
+
+    fun clearWebKey() {
+        apiKeyStore.clearAmapWebKey()
+        _uiState.value = _uiState.value.copy(webKey = "")
+        emit("已清除 Web服务 Key，搜索退回系统地理编码")
+    }
+
     /** 设置页返回后刷新 Key 状态（Key 可能在设置页里被改过）。 */
     fun refreshApiKey() {
         _uiState.value = _uiState.value.copy(
             hasApiKey = apiKeyStore.hasAmapKey(),
             apiKey = apiKeyStore.amapKey(),
+            webKey = apiKeyStore.amapWebKey(),
         )
     }
 

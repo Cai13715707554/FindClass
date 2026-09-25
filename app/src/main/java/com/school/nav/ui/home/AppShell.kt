@@ -147,8 +147,11 @@ fun AppShell(
                 when {
                     showSettings -> SettingsScreen(
                         currentKey = editorState.apiKey,
+                        currentWebKey = editorState.webKey,
                         onSaveKey = { editorViewModel.saveApiKey(it) },
                         onClearKey = { editorViewModel.clearApiKey() },
+                        onSaveWebKey = { editorViewModel.saveWebKey(it) },
+                        onClearWebKey = { editorViewModel.clearWebKey() },
                         onBack = { showSettings = false },
                         contentPadding = contentPadding,
                     )

@@ -361,6 +361,10 @@ object TestTags {
     const val SettingsSaveKey = "settings_save_key"
     const val SettingsClearKey = "settings_clear_key"
     const val SettingsKeyState = "settings_key_state"
+    const val SettingsWebKeyField = "settings_web_key_field"
+    const val SettingsSaveWebKey = "settings_save_web_key"
+    const val SettingsClearWebKey = "settings_clear_web_key"
+    const val SettingsWebKeyState = "settings_web_key_state"
 
     // ---- 地图编辑器 ----
     const val EditorScreen = "editor_screen"

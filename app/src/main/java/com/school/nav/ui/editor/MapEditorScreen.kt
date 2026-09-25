@@ -113,7 +113,8 @@ fun MapEditorScreen(
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val context = LocalContext.current
-    val searcher = remember { PoiSearcher(context) }
+    // 配了 Web服务 Key 就用高德 POI 模糊搜索，否则退回 Android Geocoder
+    val searcher = remember(state.webKey) { PoiSearcher(context, state.webKey) }
     val scope = rememberCoroutineScope()
 
     var showList by rememberSaveable { mutableStateOf(false) }
@@ -217,13 +218,15 @@ fun MapEditorScreen(
                 if (query.isBlank()) {
                     results = emptyList()
                 } else {
-                    // 边输边搜，但**防抖 300ms**：Geocoder 有调用频率限制，
-                    // 每敲一个字就查一次很容易被限流，而且每次查询现在会做多轮降级。
-                    // 用 delay 实现防抖：新的输入会取消上一个协程，只有停顿下来才真正查询。
+                    // 边输边搜，但**防抖 300ms**：高德 Web API 有配额、
+                    // Geocoder 有调用频率限制，每敲一个字就查一次容易被限流。
+                    // 用 delay 实现防抖：新的输入会取消上一个协程，停顿下来才真正查询。
                     searching = true
                     scope.launch {
                         delay(SEARCH_DEBOUNCE_MS)
-                        results = searcher.search(query)
+                        val outcome = searcher.search(query)
+                        results = outcome.results
+                        searchError = outcome.message
                         searching = false
                     }
                 }
@@ -231,9 +234,10 @@ fun MapEditorScreen(
             onSubmit = { query ->
                 searching = true
                 scope.launch {
-                    results = searcher.search(query)
+                    val outcome = searcher.search(query)
+                    results = outcome.results
+                    searchError = outcome.message
                     searching = false
-                    if (results.isEmpty()) searchError = "没找到「$query」。可以试试少写几个字，或写上一级地名（如只写城市名）。"
                 }
             },
             onPick = { result ->
@@ -491,14 +495,10 @@ private fun SearchOverlay(
                             maxLines = 1,
                         )
                         Text(
-                            text = if (result.isFuzzy) {
-                                // 说清是放宽后的近似结果，免得用户以为搜错了
-                                "近似匹配「${result.matchedKeyword}」· ${result.coordinateText}"
-                            } else {
-                                result.coordinateText
-                            },
+                            text = result.subtitle,
                             fontSize = 11.sp,
                             color = if (result.isFuzzy) NavColors.Brand else NavColors.TextSecondary,
+                            maxLines = 1,
                         )
                     }
                 }

@@ -31,14 +31,28 @@ class MapEditorViewModelTest {
     private lateinit var keyStore: InMemoryApiKeyStore
 
     /** 内存版 Key 存储，避免拉起 SharedPreferences。 */
-    private class InMemoryApiKeyStore(private var key: String = "") : ApiKeyStore {
+    private class InMemoryApiKeyStore(
+        private var key: String = "",
+        private var webKey: String = "",
+    ) : ApiKeyStore {
         override fun amapKey(): String = key
+
+        override fun amapWebKey(): String = webKey
+
         override fun saveAmapKey(key: String) {
             this.key = key.trim()
         }
 
+        override fun saveAmapWebKey(key: String) {
+            this.webKey = key.trim()
+        }
+
         override fun clearAmapKey() {
             key = ""
+        }
+
+        override fun clearAmapWebKey() {
+            webKey = ""
         }
     }
 
@@ -455,8 +469,32 @@ class MapEditorViewModelTest {
     @Test
     fun `已有 Key 时初始状态即标记为已配置`() {
         keyStore.saveAmapKey("existing-key")
+        keyStore.saveAmapWebKey("existing-web-key")
         val vm = viewModel()
         assertTrue(vm.uiState.value.hasApiKey)
         assertEquals("existing-key", vm.uiState.value.apiKey)
+        assertEquals("existing-web-key", vm.uiState.value.webKey)
+    }
+
+    @Test
+    fun `Web服务 Key 可保存与清除且与地图 Key 互不影响`() {
+        val vm = viewModel()
+        vm.saveApiKey("map-key")
+        vm.saveWebKey("  web-key  ")
+
+        assertEquals("map-key", vm.uiState.value.apiKey)
+        assertEquals("应去掉首尾空白", "web-key", vm.uiState.value.webKey)
+
+        vm.clearWebKey()
+        assertTrue("清掉 Web Key 不该影响地图 Key", vm.uiState.value.apiKey == "map-key")
+        assertTrue(vm.uiState.value.webKey.isEmpty())
+    }
+
+    @Test
+    fun `空 Web服务 Key 不会被保存`() {
+        val vm = viewModel()
+        vm.saveWebKey("   ")
+        assertTrue(vm.uiState.value.webKey.isEmpty())
+        assertTrue(keyStore.amapWebKey().isEmpty())
     }
 }
