@@ -49,7 +49,7 @@ data class RouteTextConfig(
  *  - 绝不出现教室编号 / id；
  *  - 只用元素的中文名；
  *  - 只用“沿走廊向东走、左手边、右手边、正前方、隔壁”这类相对描述；
- *  - 楼梯口、电梯口作为跨层的关键转向点。
+ *  - 楼梯口作为跨层的关键转向点。
  */
 object RouteText {
 
@@ -216,13 +216,7 @@ object RouteText {
         return listOf(RouteStep("先出${current.building.name}，${proximity}${levelPart}"))
     }
 
-    /** 跨楼时，若能识别出口元素，先引导用户走到出口。 */
-    fun exitHint(current: Position): List<RouteStep> {
-        val entrance = current.floor.elements.firstOrNull { it.elementType == ElementType.Entrance }
-            ?: return emptyList()
-        if (entrance.id == current.element.id) return emptyList()
-        return listOf(RouteStep("先走到${entrance.name}。"))
-    }
+    /** 跨楼时先出楼这一段的前置语（当前只给楼栋级指引，不需要出口元素）。 */
 
     // ---------------------------------------------------------------- 工具
 

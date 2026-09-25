@@ -33,6 +33,14 @@ data class CenterRequest(
     val zoom: Float,
 )
 
+/**
+ * 楼层数上限，避免用户手滑输入 99999 把层号选择器撑爆。
+ *
+ * 放成文件级常量而不是 companion 里的成员：这样状态类和 ViewModel 都能直接用，
+ * 不会出现「同一个常量要在两处引用」的作用域麻烦。
+ */
+const val MAX_FLOOR_COUNT: Int = 100
+
 /** 编辑器界面状态。 */
 data class EditorUiState(
     val hasApiKey: Boolean = false,
@@ -42,12 +50,21 @@ data class EditorUiState(
     val mode: EditorMode = EditorMode.Building,
     /** 当前正在画哪栋楼的楼层元素；教学楼模式下用 [draftName] 新建/覆盖。 */
     val targetBuildingId: String? = null,
-    /** 楼层内元素画在第几层。 */
+    /** 楼层内元素画在第几层（跨层元素是起始层）。 */
     val floorLevel: Int = 1,
+    /**
+     * 跨层元素的结束层。
+     *
+     * 只有楼梯这类会穿过楼板的元素才用得到：它不属于单独某一层，
+     * 所以让用户选「起始层 → 结束层」，合并时在每一层都生成一份同名楼梯。
+     */
+    val endFloorLevel: Int = 1,
 
     // ---- 草稿 ----
     val draftPoints: List<LngLat> = emptyList(),
     val draftName: String = "",
+    /** 新建楼栋时填的楼层数，成面后落到 [EditorBuilding.floorCount]。 */
+    val draftFloorCount: Int = com.school.nav.core.data.EditorBuilding.DEFAULT_FLOOR_COUNT,
 
     // ---- 成果 ----
     val buildings: List<EditorBuilding> = emptyList(),
@@ -71,6 +88,12 @@ data class EditorUiState(
     /** 当前模式下能否落笔：楼层元素必须先有目标楼栋。 */
     val canDraw: Boolean
         get() = if (mode.needsBuilding) targetBuilding != null else true
+
+    /** 当前模式是否是跨层元素（楼梯），需要用户选择起始层与结束层。 */
+    val isCrossFloorMode: Boolean get() = mode.elementType == com.school.nav.core.model.ElementType.Stair
+
+    /** 目标楼栋的可选层号。 */
+    val floorOptions: IntRange get() = targetBuilding?.levelRange ?: (1..1)
 
     companion object {
         const val MIN_POLYGON_POINTS = 3
@@ -144,11 +167,39 @@ class MapEditorViewModel(
     }
 
     fun setFloorLevel(level: Int) {
-        _uiState.value = _uiState.value.copy(floorLevel = level.coerceAtLeast(1))
+        val coerced = level.coerceAtLeast(1)
+        // 起始层不能超过结束层，否则跨层元素会算出反的区间
+        _uiState.value = _uiState.value.copy(
+            floorLevel = coerced,
+            endFloorLevel = maxOf(coerced, _uiState.value.endFloorLevel),
+        )
+    }
+
+    /** 设置跨层元素的结束层，不允许低于起始层。 */
+    fun setEndFloorLevel(level: Int) {
+        val state = _uiState.value
+        _uiState.value = state.copy(endFloorLevel = level.coerceIn(state.floorLevel, Int.MAX_VALUE))
+    }
+
+    /** 修改某栋楼的名义楼层数。 */
+    fun setBuildingFloorCount(id: String, count: Int) {
+        val safe = count.coerceIn(1, MAX_FLOOR_COUNT)
+        _uiState.value = _uiState.value.copy(
+            buildings = _uiState.value.buildings.map {
+                if (it.id == id) it.copy(floorCount = safe) else it
+            },
+        )
     }
 
     fun setDraftName(name: String) {
         _uiState.value = _uiState.value.copy(draftName = name)
+    }
+
+    /** 新建楼栋时填的楼层数。 */
+    fun setDraftFloorCount(count: Int) {
+        _uiState.value = _uiState.value.copy(
+            draftFloorCount = count.coerceIn(1, MAX_FLOOR_COUNT),
+        )
     }
 
     // ------------------------------------------------------------ 绘制
@@ -198,13 +249,22 @@ class MapEditorViewModel(
         val existing = state.buildings.firstOrNull { it.name == name }
 
         val updated = if (existing != null) {
-            // 同名视为「重画轮廓」，保留它已有的楼层
+            // 同名视为「重画轮廓」，保留它已有的楼层；楼层数按这次填的更新
             state.buildings.map {
-                if (it.id == existing.id) it.copy(polygon = state.draftPoints) else it
+                if (it.id == existing.id) {
+                    it.copy(polygon = state.draftPoints, floorCount = state.draftFloorCount)
+                } else {
+                    it
+                }
             }
         } else {
             val id = generateBuildingId(name, state.buildings)
-            state.buildings + EditorBuilding(id = id, name = name, polygon = state.draftPoints)
+            state.buildings + EditorBuilding(
+                id = id,
+                name = name,
+                polygon = state.draftPoints,
+                floorCount = state.draftFloorCount,
+            )
         }
 
         _uiState.value = state.copy(
@@ -226,11 +286,13 @@ class MapEditorViewModel(
         // target 已经过非空检查，后续都用它而不是再读一次 state.targetBuilding ——
         // 读属性会丢掉智能转换，编译器只能当成可空类型
         val existingElements = target.floor(state.floorLevel)?.elements.orEmpty()
+        val toLevel = if (state.isCrossFloorMode) state.endFloorLevel else null
         val element = EditorElement.from(
             mode = mode,
             id = generateElementId(mode, name, existingElements),
             name = name,
             points = state.draftPoints,
+            toLevel = toLevel,
         )
 
         val newFloors = if (target.floor(state.floorLevel) == null) {
@@ -252,7 +314,13 @@ class MapEditorViewModel(
             draftPoints = emptyList(),
             draftName = "",
         )
-        emit("已在 ${target.name} ${state.floorLevel} 楼添加「$name」")
+        emit(
+            if (toLevel != null) {
+                "已在 ${target.name} 添加「$name」（${state.floorLevel}→${toLevel} 楼，每层都会生成）"
+            } else {
+                "已在 ${target.name} ${state.floorLevel} 楼添加「$name」"
+            },
+        )
     }
 
     /** 删掉一栋楼（连带它的楼层元素）。 */

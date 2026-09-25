@@ -20,13 +20,17 @@ data class LngLat(
  *
  * 说明：JSON 里 `type` 是字符串，解析时用 [ElementType.fromRaw] 做容错，
  * 遇到未知类型降级为 [ElementType.Room]，避免一份脏数据导致整栋楼不可用。
+ *
+ * **已移除 `elevator`（电梯口）与 `entrance`（入口）**：
+ * 电梯口在 MVP 里没有数据来源、也没被导航算法真正用到；
+ * 入口既不能作为导航目标、作为中途转向点也没有路径数据支撑。
+ * 保留它们只会让编辑器多两个画了没用的选项，所以连同数据一起删掉。
+ * 旧数据里若还有这两种类型，会被 [fromRaw] 降级成教室，不会崩。
  */
 enum class ElementType(val raw: String, val displayName: String) {
     Room("room", "教室"),
     Office("office", "办公室"),
     Stair("stair", "楼梯口"),
-    Elevator("elevator", "电梯口"),
-    Entrance("entrance", "入口"),
     Toilet("toilet", "卫生间"),
     ;
 
@@ -36,7 +40,7 @@ enum class ElementType(val raw: String, val displayName: String) {
     }
 }
 
-/** 楼层内的一个元素：教室、办公室、楼梯口、电梯口、入口、卫生间。 */
+/** 楼层内的一个元素：教室、办公室、楼梯口、卫生间。 */
 @Serializable
 data class Element(
     val id: String,

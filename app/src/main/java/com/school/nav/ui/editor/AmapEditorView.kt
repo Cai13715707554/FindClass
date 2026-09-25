@@ -29,10 +29,13 @@ import com.school.nav.state.CenterRequest
 /** 经纬度 -> 高德坐标。注意高德 LatLng 的参数顺序是 (纬度, 经度)。 */
 private fun LngLat.toLatLng(): LatLng = LatLng(lat, lng)
 
-/** 各类元素的配色，和首页导航的语义保持一致（楼梯口/电梯口是转向点，用暖色）。 */
+/**
+ * 各类元素的配色，和首页导航的语义保持一致：
+ * 楼梯口是跨层转向点，用暖色突出；卫生间与商铺一样用中性灰，避免抢视线。
+ */
 private fun strokeColorOf(type: ElementType): String = when (type) {
-    ElementType.Stair, ElementType.Elevator -> "#FF8A00"
-    ElementType.Entrance -> "#2F6BFF"
+    ElementType.Stair -> "#FF8A00"
+    ElementType.Toilet -> "#8A90A0"
     else -> "#00C2D1"
 }
 

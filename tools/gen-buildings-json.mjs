@@ -51,7 +51,7 @@ function rect(origin, x1, y1, x2, y2) {
  *   ┌──┬──┬──┬──┬──┐
  *   │  │  │  │  │  │
  *   ╞══╧══╧══╧══╧══╡  ← 走廊（y: -1 ~ 1）
- *   │南门│楼梯│教室│教室│教室│电梯│   （y: -9 ~ -1，入口延伸到 y=1）
+ *   │楼梯│教室│教室│教室│卫生间│   （y: -9 ~ -1）
  *   └───┴───┴───┴───┴───┴───┘
  */
 
@@ -67,19 +67,15 @@ function northRow(origin, names) {
   });
 }
 
-/** 南侧元素：从 x = -26 依次向右排列，宽度由 width 决定 */
+/** 南侧元素：从 x = -26 依次向右排列，宽度由 width 决定，都贴走廊南侧（y: -9 ~ -1） */
 function southRow(origin, items) {
   let x = -26;
   return items.map((item) => {
     const { width } = item;
-    const isEntrance = item.type === 'entrance';
-    // 入口占满走廊口，其余贴走廊南侧
-    const y1 = isEntrance ? 1 : -1;
-    const y2 = isEntrance ? -1 : -9;
     const el = {
       type: item.type,
       name: item.name,
-      points: rect(origin, x, y2, x + width, y1),
+      points: rect(origin, x, -9, x + width, -1),
     };
     x += width;
     return el;
@@ -105,13 +101,17 @@ function buildFloor(origin, id, level, relativeHeightM, northNames, southItems) 
 const A_ORIGIN = { lng: 113.1234, lat: 23.1234 };
 const B_ORIGIN = { lng: 113.1244, lat: 23.1234 };
 
-/** 标准南侧配置：入口 + 楼梯 + 若干教室 + 电梯 */
+/**
+ * 标准南侧配置：楼梯 + 若干教室 + 卫生间。
+ *
+ * 入口（entrance）与电梯口（elevator）两种类型已从数据模型中删除，
+ * 这里不再生成 —— 详见 core/model/Models.kt 的 ElementType 注释。
+ */
 function southLayout(rooms) {
   return [
-    { name: '南门', type: 'entrance', width: 4 },
     { name: '东楼梯口', type: 'stair', width: 4 },
     ...rooms.map((name) => ({ name, type: 'room', width: 8 })),
-    { name: '电梯口', type: 'elevator', width: 4 },
+    { name: '卫生间', type: 'toilet', width: 4 },
   ];
 }
 
@@ -132,13 +132,11 @@ const A = {
       0,
       ['语文教研室', '数学教研室', '英语教研室', '历史教研室', '地理教研室'],
       [
-        { name: '南门', type: 'entrance', width: 4 },
         { name: '东楼梯口', type: 'stair', width: 4 },
         { name: '计算机房', type: 'room', width: 8 },
         { name: '多媒体教室', type: 'room', width: 8 },
         { name: '语音教室', type: 'room', width: 8 },
         { name: '卫生间', type: 'toilet', width: 4 },
-        { name: '电梯口', type: 'elevator', width: 4 },
       ],
     ),
     buildFloor(
@@ -177,11 +175,9 @@ const B = {
       0,
       ['报告厅', '接待室', '校史馆'],
       [
-        { name: '西门', type: 'entrance', width: 4 },
         { name: '西楼梯口', type: 'stair', width: 4 },
         { name: '值班室', type: 'office', width: 8 },
         { name: '卫生间', type: 'toilet', width: 4 },
-        { name: '电梯口', type: 'elevator', width: 4 },
       ],
     ),
     buildFloor(
@@ -195,7 +191,6 @@ const B = {
         { name: '自习室', type: 'room', width: 8 },
         { name: '研讨室', type: 'room', width: 8 },
         { name: '教师办公室', type: 'office', width: 8 },
-        { name: '电梯口', type: 'elevator', width: 4 },
       ],
     ),
     buildFloor(
@@ -209,7 +204,6 @@ const B = {
         { name: '实验室', type: 'room', width: 8 },
         { name: '准备室', type: 'room', width: 8 },
         { name: '器材室', type: 'office', width: 8 },
-        { name: '电梯口', type: 'elevator', width: 4 },
       ],
     ),
   ],

@@ -1,6 +1,7 @@
 package com.school.nav.state
 
 import com.school.nav.core.data.CampusRepository
+import com.school.nav.core.data.EditorBuilding
 import com.school.nav.core.data.EditorMode
 import com.school.nav.core.model.ElementType
 import com.school.nav.core.model.LngLat
@@ -243,8 +244,6 @@ class MapEditorViewModelTest {
 
         val cases = listOf(
             EditorMode.Stair to ElementType.Stair,
-            EditorMode.Elevator to ElementType.Elevator,
-            EditorMode.Entrance to ElementType.Entrance,
             EditorMode.Toilet to ElementType.Toilet,
             EditorMode.Office to ElementType.Office,
         )
@@ -260,6 +259,69 @@ class MapEditorViewModelTest {
                 elements.last().elementType,
             )
         }
+    }
+
+    @Test
+    fun `楼梯可选起止楼层并在每一层都生成`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋", points = 3)
+        val id = vm.uiState.value.buildings.first().id
+
+        vm.setMode(EditorMode.Stair)
+        vm.setTargetBuilding(id)
+        vm.setFloorLevel(2)
+        vm.setEndFloorLevel(4)
+
+        addPoints(vm, 3)
+        vm.setDraftName("东楼梯口")
+        vm.finishDraft()
+
+        val building = vm.uiState.value.buildings.single()
+        // 原始草稿仍记在起始层，并带着结束层
+        val draft = building.floor(2)!!.elements.single()
+        assertEquals(4, draft.toLevel)
+        assertTrue("2→4 应判定为跨层", draft.isCrossFloor)
+
+        // 合并成导航数据时，2、3、4 楼都要有这份楼梯
+        val merged = building.toBuilding()
+        for (level in 2..4) {
+            val floor = merged.floorByLevel(level)
+            assertNotNull("$level 楼应生成楼梯", floor)
+            assertTrue(
+                "$level 楼应能找到同名楼梯",
+                floor!!.elements.any { it.name == "东楼梯口" },
+            )
+        }
+        assertNull("1 楼不应有这个楼梯", merged.floorByLevel(1))
+    }
+
+    @Test
+    fun `结束楼层不会低于起始楼层`() {
+        val vm = viewModel()
+        vm.setFloorLevel(3)
+        vm.setEndFloorLevel(1)
+        assertEquals("结束层应被抬到起始层", 3, vm.uiState.value.endFloorLevel)
+    }
+
+    @Test
+    fun `楼层数可以修改且会夹在合理区间`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val id = vm.uiState.value.buildings.first().id
+        assertEquals(EditorBuilding.DEFAULT_FLOOR_COUNT, vm.uiState.value.buildings.first().floorCount)
+
+        vm.setBuildingFloorCount(id, 6)
+        assertEquals(6, vm.uiState.value.buildings.first().floorCount)
+
+        vm.setBuildingFloorCount(id, 0)
+        assertEquals("不允许 0 层", 1, vm.uiState.value.buildings.first().floorCount)
+
+        vm.setBuildingFloorCount(id, 99_999)
+        assertEquals(
+            "上限应被夹住",
+            MAX_FLOOR_COUNT,
+            vm.uiState.value.buildings.first().floorCount,
+        )
     }
 
     @Test

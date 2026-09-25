@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.school.nav.state.MapEditorViewModel
+import com.school.nav.state.NavViewModel
 import com.school.nav.ui.home.AppShell
 import com.school.nav.ui.theme.FindClassTheme
 
@@ -49,7 +52,20 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    AppShell(container = container)
+                    // ViewModel 建在 **Activity 作用域**（这里 owner 就是 Activity），
+                    // 而不是页面内部。页面用 `when` 切换，切走时整棵子树会离开组合树；
+                    // 如果 ViewModel 建在页面里，切回来就会重新构造，状态全丢 ——
+                    // 地图会因此重置到默认位置、草稿也会没。
+                    val navViewModel: NavViewModel =
+                        viewModel(factory = NavViewModel.factory(container))
+                    val editorViewModel: MapEditorViewModel =
+                        viewModel(factory = MapEditorViewModel.factory(container))
+
+                    AppShell(
+                        container = container,
+                        navViewModel = navViewModel,
+                        editorViewModel = editorViewModel,
+                    )
                 }
             }
         }

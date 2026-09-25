@@ -111,7 +111,7 @@ object FloorSorter {
         // 排序键用**显式 Comparator**，不用 compareBy(a, b, c, d)。
         //
         // 原因：刻意踩过一次 —— compareBy 的多 selector 重载在这里没有按预期生效，
-        // 次级键被丢掉，导致「电梯口 / 历史教研室」这种投影坐标相同的元素
+        // 次级键被丢掉，导致「卫生间 / 地理教研室」这种投影坐标相同的元素
         // 顺序随机（同一份数据两次运行结果不同）。显式写出来最不容易出错。
         //
         // 键的顺序：
@@ -126,7 +126,7 @@ object FloorSorter {
 
                 // 投影坐标**量化到微米**再比较。
                 //
-                // 实测原因：同一经度的教室与电梯口，理论投影完全相等，但经过
+                // 实测原因：同一经度的教室与卫生间，理论投影完全相等，但经过
                 // 「经纬度 <-> 米」两次换算后会差出约 1.5e-9 米（纯浮点噪声）。
                 // 直接 compareTo 会把这个噪声当成真实差异，于是「北侧优先」这次级键
                 // 永远不会被执行，顺序看上去就像是随机的。
@@ -207,14 +207,12 @@ object FloorSorter {
     /**
      * 找该层的楼梯口，作为跨层换乘点。
      *
-     * 优先选离 [from] 最近的楼梯；没有楼梯时退回电梯口，再退回第一个元素。
+     * 优先选离 [from] 最近的楼梯；没有楼梯数据时退回该层第一个元素。
      */
     fun findStair(floor: Floor, from: LngLat? = null): Element? {
         val stairs = floor.elements.filter { it.elementType == ElementType.Stair }
-        val candidates = stairs.ifEmpty {
-            floor.elements.filter { it.elementType == ElementType.Elevator }
-        }
-        if (candidates.isEmpty()) return floor.elements.firstOrNull()
+        val candidates = stairs.ifEmpty { floor.elements }
+        if (candidates.isEmpty()) return null
         if (from == null) return candidates.first()
         return candidates.minBy { Geo.distanceMeters(from, it.centroid) }
     }

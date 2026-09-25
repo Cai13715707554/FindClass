@@ -60,19 +60,20 @@ class CampusRepositoryTest {
     }
 
     @Test
-    fun `入口不作为导航目标`() {
-        assertTrue(repository.search("南门").isEmpty())
+    fun `卫生间不作为导航目标`() {
+        // 卫生间在数据里存在，但不该被当成要去的地方
+        assertTrue(repository.search("卫生间").isEmpty())
     }
 
     @Test
-    fun `默认当前位置排除入口与楼梯口`() {
+    fun `默认当前位置排除楼梯口与卫生间`() {
         val floor = building.floorByLevel(1)!!
-        val point = Fixtures.ll(-25.0, 0.0)  // 就站在南门里
+        val point = Fixtures.ll(-20.0, -5.0)  // 站在东楼梯口里
         val element = repository.nearestStandableElement(floor, point)
         assertNotNull(element)
         assertTrue(
-            "不应把入口当作人的位置，实际得到：${element!!.name}",
-            element.name != "南门",
+            "不应把楼梯口当作人的位置，实际得到：${element!!.name}",
+            element.name != "东楼梯口",
         )
     }
 

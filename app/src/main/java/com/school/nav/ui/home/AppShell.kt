@@ -54,11 +54,11 @@ import com.school.nav.ui.theme.NavColors
  * 点底部导航会关掉它，符合用户对 Tab 的预期。
  */
 @Composable
-fun AppShell(container: AppContainer) {
-    val navViewModel: NavViewModel = viewModel(factory = NavViewModel.factory(container))
-    val editorViewModel: MapEditorViewModel =
-        viewModel(factory = MapEditorViewModel.factory(container))
-
+fun AppShell(
+    container: AppContainer,
+    navViewModel: NavViewModel,
+    editorViewModel: MapEditorViewModel,
+) {
     val navState by navViewModel.uiState.collectAsStateWithLifecycle()
     val editorState by editorViewModel.uiState.collectAsStateWithLifecycle()
 
@@ -133,7 +133,12 @@ fun AppShell(container: AppContainer) {
                         onModeChange = { editorViewModel.setMode(it) },
                         onTargetBuildingChange = { editorViewModel.setTargetBuilding(it) },
                         onFloorChange = { editorViewModel.setFloorLevel(it) },
+                        onEndFloorChange = { editorViewModel.setEndFloorLevel(it) },
+                        onBuildingFloorCountChange = { id, count ->
+                            editorViewModel.setBuildingFloorCount(id, count)
+                        },
                         onNameChange = { editorViewModel.setDraftName(it) },
+                        onFloorCountChange = { editorViewModel.setDraftFloorCount(it) },
                         onUndo = { editorViewModel.undoPoint() },
                         onFinish = { editorViewModel.finishDraft() },
                         onCancelDraft = { editorViewModel.cancelDraft() },
@@ -147,6 +152,7 @@ fun AppShell(container: AppContainer) {
                         onCenterConsumed = { editorViewModel.consumeCenterRequest(it) },
                         onGoToPoint = { editorViewModel.goTo(it) },
                         onGoSettings = { showSettings = true },
+                        contentPadding = contentPadding,
                     )
 
                     else -> ProfileScreen(

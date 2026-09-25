@@ -2,6 +2,7 @@ package com.school.nav
 
 import com.school.nav.core.data.CampusRepository
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -84,12 +85,20 @@ class BuildingsDataTest {
     fun `每层都有楼梯口作为跨层换乘点`() {
         for (building in repository.buildings) {
             for (floor in building.floors) {
-                val hasVertical = floor.elements.any {
-                    it.elementType == com.school.nav.core.model.ElementType.Stair ||
-                        it.elementType == com.school.nav.core.model.ElementType.Elevator
+                val hasStair = floor.elements.any {
+                    it.elementType == com.school.nav.core.model.ElementType.Stair
                 }
-                assertTrue("${building.name} ${floor.level} 楼缺少楼梯口/电梯口", hasVertical)
+                assertTrue("${building.name} ${floor.level} 楼缺少楼梯口", hasStair)
             }
         }
+    }
+
+    @Test
+    fun `数据里不再包含已删除的电梯口与入口类型`() {
+        // 这两种类型已从 ElementType 删除；旧数据若残留会被降级成教室，
+        // 但 assets 是自己的数据，必须干净
+        val raw = dataFile.readText()
+        assertFalse("数据里仍有 elevator", raw.contains("\"elevator\""))
+        assertFalse("数据里仍有 entrance", raw.contains("\"entrance\""))
     }
 }

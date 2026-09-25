@@ -20,14 +20,14 @@ class FloorSorterTest {
         val names = order.elements.map { it.name }
 
         // 走廊主轴自西向东；投影坐标相同时北侧优先。
-        // 「电梯口」与「历史教研室」同经度，历史教研室在北侧，所以它排在电梯口之前。
+        // 「卫生间」与「地理教研室」中心都在 x=15，地理教研室在北侧，所以排在前面。
         assertEquals(
             listOf(
-                "南门", "东楼梯口",
+                "东楼梯口",
                 "语文教研室", "计算机房",
                 "数学教研室", "多媒体教室",
                 "英语教研室", "语音教室",
-                "历史教研室", "电梯口",
+                "历史教研室", "卫生间",
                 "地理教研室",
             ),
             names,
@@ -43,7 +43,8 @@ class FloorSorterTest {
     @Test
     fun `沿走廊前进时北侧元素在左手边`() {
         val order = FloorSorter.sort(floor1)
-        val reference = floor1.element("南门")
+        // 用走廊正中的东楼梯口做参照（它贴走廊，横向偏移小）
+        val reference = floor1.element("东楼梯口")
 
         // 北侧教室（y 为正）应在左手边，南侧（y 为负）在右手边
         val north = floor1.element("数学教研室")
@@ -79,11 +80,14 @@ class FloorSorterTest {
     }
 
     @Test
-    fun `没有楼梯时退回电梯口`() {
+    fun `没有楼梯数据时退回该层第一个元素而不是返回 null`() {
         val noStair = floor1.copy(
-            elements = floor1.elements.filter { it.elementType != com.school.nav.core.model.ElementType.Stair },
+            elements = floor1.elements.filter {
+                it.elementType != com.school.nav.core.model.ElementType.Stair
+            },
         )
-        assertEquals("电梯口", FloorSorter.findStair(noStair)?.name)
+        // 有元素就一定要给出换乘点，否则跨层导航会直接失败
+        assertEquals(noStair.elements.first().name, FloorSorter.findStair(noStair)?.name)
     }
 
     @Test
@@ -102,12 +106,12 @@ class FloorSorterTest {
             elements = listOf(
                 Fixtures.northRoom("北一", 0.0),
                 Fixtures.southRoom("南一", 0.0),
-                Fixtures.elevator("电梯", 0.0),
+                Fixtures.toilet("卫生间", 0.0),
             ),
         )
         val order = FloorSorter.sort(floor)
         // 主轴吸附到正南北后，走廊方向是向南，于是同纬度时按「西侧优先」排列
-        assertEquals(listOf("电梯", "南一", "北一"), order.elements.map { it.name })
+        assertEquals(listOf("卫生间", "南一", "北一"), order.elements.map { it.name })
         assertEquals(CorridorDirection.North, order.direction)
         // 沿正北前进时，左手边是西（-x 方向）
         val (lx, ly) = order.leftVector
@@ -122,7 +126,7 @@ class FloorSorterTest {
     }
 
     @Test
-    fun `默认当前位置取离用户最近的元素且排除入口`() {
+    fun `默认当前位置取离用户最近的元素`() {
         // 用户站在北侧语文教研室门口附近
         val point = Fixtures.ll(-16.0, 9.5)
         val nearest = FloorSorter.nearestElement(floor1, point)

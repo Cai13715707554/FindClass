@@ -6,16 +6,24 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Check
@@ -36,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,15 +54,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import com.school.nav.core.data.EditorMode
 import com.school.nav.core.model.LngLat
 import com.school.nav.data.PoiResult
@@ -67,14 +77,11 @@ import kotlinx.coroutines.launch
 /**
  * 地图编辑器页（导航栏「地图」）。
  *
- * 布局原则：**地图占满全屏**，所有控件都是浮在地图上的小卡片，
- * 而不是把地图压在下面留半屏给面板 —— 画轮廓时视野越大越好。
+ * 布局原则：**地图占满全屏**，控件都是浮在地图上的小卡片，而不是把地图压在下面
+ * 留半屏给面板 —— 画轮廓时视野越大越好。
  *
- * 控件分布：
- *  - 顶部：搜索框（找地点，用户在家也能定位到学校）+ 右上角绘制模式下拉；
- *  - 右侧：定位、撤销、放弃当前绘制的圆形按钮；
- *  - 底部：状态一行 + 「成面」「保存导入」；
- *  - 楼栋/元素清单收进弹层，不占常驻空间。
+ * 顶部会主动避开状态栏：`windowInsetsPadding(WindowInsets.statusBars)`。
+ * 之前搜索框直接顶到屏幕最上沿，被状态栏的时间/信号图标盖住，点不到也看不清。
  */
 @Composable
 fun MapEditorScreen(
@@ -83,7 +90,10 @@ fun MapEditorScreen(
     onModeChange: (EditorMode) -> Unit,
     onTargetBuildingChange: (String?) -> Unit,
     onFloorChange: (Int) -> Unit,
+    onEndFloorChange: (Int) -> Unit,
+    onBuildingFloorCountChange: (String, Int) -> Unit,
     onNameChange: (String) -> Unit,
+    onFloorCountChange: (Int) -> Unit,
     onUndo: () -> Unit,
     onFinish: () -> Unit,
     onCancelDraft: () -> Unit,
@@ -96,6 +106,7 @@ fun MapEditorScreen(
     onGoToPoint: (LngLat) -> Unit,
     onGoSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val context = LocalContext.current
     val searcher = remember { PoiSearcher(context) }
@@ -103,9 +114,11 @@ fun MapEditorScreen(
 
     var showList by rememberSaveable { mutableStateOf(false) }
     var showNameDialog by rememberSaveable { mutableStateOf(false) }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchText by rememberSaveable { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf(emptyList<PoiResult>()) }
+    var searchError by remember { mutableStateOf<String?>(null) }
 
     if (!state.hasApiKey) {
         EditorNeedsKey(onGoSettings = onGoSettings, modifier = modifier)
@@ -114,7 +127,7 @@ fun MapEditorScreen(
 
     Box(
         modifier = modifier
-            .fillMaxWidth()
+            .fillMaxSize()
             .testTag(TestTags.EditorScreen),
     ) {
         // ---- 全屏地图 ----
@@ -125,80 +138,27 @@ fun MapEditorScreen(
             onMapClick = onMapClick,
             onCenterConsumed = onCenterConsumed,
             modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight()
+                .fillMaxSize()
                 .testTag(TestTags.EditorMap),
         )
 
-        // ---- 顶部：搜索 + 模式下拉 ----
+        // ---- 顶部栏（避开状态栏）----
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.Top,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            SearchBox(
+            // 收起态只是一个外观像输入框的按钮：点它才展开成全屏搜索层
+            SearchEntry(
                 text = searchText,
-                searching = searching,
                 enabled = searcher.isAvailable(),
                 modifier = Modifier.weight(1f),
-                onTextChange = {
-                    searchText = it
-                    results = emptyList()
-                },
-                onSubmit = { query ->
-                    if (query.isBlank()) return@SearchBox
-                    searching = true
-                    scope.launch {
-                        results = searcher.search(query)
-                        searching = false
-                    }
-                },
+                onClick = { searchOpen = true },
             )
-
             ModeDropdown(current = state.mode, onSelect = onModeChange)
-        }
-
-        // 搜索结果浮层
-        if (results.isNotEmpty()) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 12.dp, end = 96.dp, top = 76.dp)
-                    .heightIn(max = 260.dp)
-                    .testTag(TestTags.EditorSearchResults),
-                shape = MaterialTheme.shapes.medium,
-                color = NavColors.Card,
-                shadowElevation = 6.dp,
-            ) {
-                LazyColumn {
-                    items(results) { result ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    onGoToPoint(result.point)
-                                    searchText = result.name
-                                    results = emptyList()
-                                }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                        ) {
-                            Text(
-                                text = result.name,
-                                fontSize = 14.sp,
-                                color = NavColors.TextPrimary,
-                                maxLines = 1,
-                            )
-                            Text(
-                                text = "%.5f, %.5f".format(result.point.lat, result.point.lng),
-                                fontSize = 11.sp,
-                                color = NavColors.TextSecondary,
-                            )
-                        }
-                    }
-                }
-            }
         }
 
         // ---- 右侧圆形工具 ----
@@ -240,12 +200,56 @@ fun MapEditorScreen(
         )
     }
 
+    // ---- 全屏搜索层 ----
+    if (searchOpen) {
+        SearchOverlay(
+            text = searchText,
+            searching = searching,
+            results = results,
+            error = searchError,
+            onTextChange = { query ->
+                searchText = query
+                searchError = null
+                if (query.isBlank()) {
+                    results = emptyList()
+                } else {
+                    // 边输边搜：输入变化就发一次查询，旧的由协程取消
+                    searching = true
+                    scope.launch {
+                        results = searcher.search(query)
+                        searching = false
+                    }
+                }
+            },
+            onSubmit = { query ->
+                searching = true
+                scope.launch {
+                    results = searcher.search(query)
+                    searching = false
+                    if (results.isEmpty()) searchError = "没找到「$query」，换个说法试试"
+                }
+            },
+            onPick = { result ->
+                onGoToPoint(result.point)
+                searchText = result.name
+                results = emptyList()
+                searchOpen = false
+            },
+            onClose = {
+                searchOpen = false
+                results = emptyList()
+            },
+        )
+    }
+
     if (showList) {
         BuildingListDialog(
             state = state,
             onDismiss = { showList = false },
             onTargetBuildingChange = onTargetBuildingChange,
             onFloorChange = onFloorChange,
+            onEndFloorChange = onEndFloorChange,
+            onBuildingFloorCountChange = onBuildingFloorCountChange,
             onRemoveBuilding = onRemoveBuilding,
             onRemoveElement = onRemoveElement,
             onReload = onReload,
@@ -254,11 +258,11 @@ fun MapEditorScreen(
 
     if (showNameDialog) {
         NameDialog(
-            mode = state.mode,
-            initial = state.draftName,
+            state = state,
             onDismiss = { showNameDialog = false },
-            onConfirm = { name ->
+            onConfirm = { name, floorCount ->
                 onNameChange(name)
+                if (floorCount != null) onFloorCountChange(floorCount)
                 showNameDialog = false
                 onFinish()
             },
@@ -271,7 +275,8 @@ fun MapEditorScreen(
 private fun EditorNeedsKey(onGoSettings: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .fillMaxWidth()
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.statusBars)
             .padding(24.dp)
             .testTag(TestTags.EditorNoKey),
         contentAlignment = Alignment.Center,
@@ -306,25 +311,31 @@ private fun EditorNeedsKey(onGoSettings: () -> Unit, modifier: Modifier = Modifi
     }
 }
 
-/** 顶部搜索框。用于用户不在学校时定位到目标地点。 */
+/** 收起态的搜索入口：外观像输入框，点一下展开全屏搜索层。 */
 @Composable
-private fun SearchBox(
+private fun SearchEntry(
     text: String,
-    searching: Boolean,
     enabled: Boolean,
-    onTextChange: (String) -> Unit,
-    onSubmit: (String) -> Unit,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = modifier,
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .testTag(TestTags.EditorSearchField),
         shape = RoundedCornerShape(24.dp),
         color = NavColors.Card,
         shadowElevation = 6.dp,
     ) {
         Row(
-            modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(
                 imageVector = Icons.Filled.Search,
@@ -332,51 +343,154 @@ private fun SearchBox(
                 tint = NavColors.TextSecondary,
                 modifier = Modifier.size(18.dp),
             )
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag(TestTags.EditorSearchField),
-                singleLine = true,
-                enabled = enabled,
-                placeholder = {
-                    Text(
-                        text = if (enabled) "搜索地点，如 某某大学" else "本机不支持地点搜索",
-                        fontSize = 13.sp,
-                        color = NavColors.TextSecondary,
-                    )
+            Text(
+                text = text.ifBlank {
+                    if (enabled) "搜索地点" else "本机不支持地点搜索"
                 },
-                trailingIcon = {
-                    when {
-                        searching -> CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = NavColors.Brand,
-                        )
-
-                        text.isNotEmpty() -> IconButton(
-                            onClick = { onTextChange("") },
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                Icons.Filled.Close,
-                                contentDescription = "清空",
-                                tint = NavColors.TextSecondary,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        }
-                    }
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Transparent,
-                    unfocusedBorderColor = Color.Transparent,
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                ),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { onSubmit(text) }),
+                fontSize = 14.sp,
+                color = if (text.isBlank()) NavColors.TextSecondary else NavColors.TextPrimary,
+                maxLines = 1,
             )
+        }
+    }
+}
+
+/**
+ * 全屏搜索层。
+ *
+ * 展开后占满宽度、输入框自动聚焦，**输入时实时出结果**（不是点搜索才出），
+ * 点结果即跳转并收起。用不透明底 + 地图可见的留白，既让输入区域好点，
+ * 又不至于完全盖住地图。
+ */
+@Composable
+private fun SearchOverlay(
+    text: String,
+    searching: Boolean,
+    results: List<PoiResult>,
+    error: String?,
+    onTextChange: (String) -> Unit,
+    onSubmit: (String) -> Unit,
+    onPick: (PoiResult) -> Unit,
+    onClose: () -> Unit,
+) {
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    // 展开即聚焦并弹键盘
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboard?.show()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xF2FFFFFF))
+            // 避开状态栏；键盘弹出时再抬升，保证输入框始终可见
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .imePadding()
+            .testTag(TestTags.EditorSearchOverlay),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // ---- 输入行：占满宽度 ----
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(24.dp),
+                    color = NavColors.FieldBackground,
+                ) {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = onTextChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester)
+                            .testTag(TestTags.EditorSearchInput),
+                        singleLine = true,
+                        placeholder = {
+                            Text("搜索地点，如 某某大学", fontSize = 14.sp, color = NavColors.TextSecondary)
+                        },
+                        trailingIcon = {
+                            when {
+                                searching -> CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = NavColors.Brand,
+                                )
+
+                                text.isNotEmpty() -> IconButton(
+                                    onClick = { onTextChange("") },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = "清空",
+                                        tint = NavColors.TextSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color.Transparent,
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                        ),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { onSubmit(text) }),
+                    )
+                }
+                TextButton(
+                    onClick = onClose,
+                    modifier = Modifier.testTag(TestTags.EditorSearchClose),
+                ) { Text("取消") }
+            }
+
+            // ---- 实时结果 ----
+            error?.let {
+                Text(
+                    text = it,
+                    fontSize = 13.sp,
+                    color = NavColors.TextSecondary,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+            }
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .heightIn(min = 120.dp),
+            ) {
+                items(results) { result ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(result) }
+                            .padding(horizontal = 20.dp, vertical = 12.dp)
+                            .testTag(TestTags.EditorSearchResultItem),
+                    ) {
+                        Text(
+                            text = result.name,
+                            fontSize = 15.sp,
+                            color = NavColors.TextPrimary,
+                            maxLines = 1,
+                        )
+                        Text(
+                            text = "%.5f, %.5f".format(result.point.lat, result.point.lng),
+                            fontSize = 11.sp,
+                            color = NavColors.TextSecondary,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -543,6 +657,10 @@ private fun statusLine(state: EditorUiState): String = when {
     state.draftPoints.isEmpty() && state.mode == EditorMode.Building ->
         "点选楼栋拐角，至少 ${EditorUiState.MIN_POLYGON_POINTS} 个点"
 
+    state.draftPoints.isEmpty() && state.isCrossFloorMode ->
+        "在「${state.targetBuilding?.name}」画楼梯，将覆盖 " +
+            "${state.floorLevel}→${state.endFloorLevel} 楼"
+
     state.draftPoints.isEmpty() ->
         "在「${state.targetBuilding?.name}」${state.floorLevel} 楼点选${state.mode.label}边界"
 
@@ -552,15 +670,31 @@ private fun statusLine(state: EditorUiState): String = when {
     else -> "已选 ${state.draftPoints.size} 个点，可以成面"
 }
 
-/** 命名弹窗。成面之后再命名，避免打断绘制节奏。 */
+/**
+ * 命名弹窗。
+ *
+ * 教学楼模式额外让用户填「楼层数」—— 它是楼栋数据的一部分，
+ * 后续楼层选择器要用它做上限，不然用户得手动敲层号。
+ */
 @Composable
 private fun NameDialog(
-    mode: EditorMode,
-    initial: String,
+    state: EditorUiState,
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
+    onConfirm: (name: String, floorCount: Int?) -> Unit,
 ) {
-    var name by rememberSaveable(initial) { mutableStateOf(initial.ifBlank { mode.label }) }
+    val mode = state.mode
+    var name by rememberSaveable(mode.name) {
+        mutableStateOf(
+            state.buildings.firstOrNull { it.name == state.draftName.trim() }?.name
+                ?: state.draftName.ifBlank { mode.label },
+        )
+    }
+    var floorCountText by rememberSaveable(mode.name) {
+        mutableStateOf(
+            state.buildings.firstOrNull { it.name == state.draftName.trim() }?.floorCount?.toString()
+                ?: com.school.nav.core.data.EditorBuilding.DEFAULT_FLOOR_COUNT.toString(),
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -577,15 +711,28 @@ private fun NameDialog(
                     value = name,
                     onValueChange = { name = it },
                     singleLine = true,
+                    label = { Text("名称") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag(TestTags.EditorNameField),
                 )
+                if (mode == EditorMode.Building) {
+                    OutlinedTextField(
+                        value = floorCountText,
+                        onValueChange = { floorCountText = it.filter { c -> c.isDigit() }.take(3) },
+                        singleLine = true,
+                        label = { Text("楼层数") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp)
+                            .testTag(TestTags.EditorFloorCountField),
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(name) },
+                onClick = { onConfirm(name, floorCountText.toIntOrNull()) },
                 modifier = Modifier.testTag(TestTags.EditorFinishConfirm),
             ) { Text("确定") }
         },

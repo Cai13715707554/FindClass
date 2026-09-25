@@ -78,7 +78,8 @@ class CampusRepository private constructor(
      * 在当前楼层里找离用户最近的元素，直接作为默认当前位置。
      *
      * 产品文档明确要求“不弹窗、不推荐、不打断”，所以这里只做一件事：返回最近的元素。
-     * 入口、楼梯口这类不是“人可能站的地方”的元素排除在外，避免默认位置显示成“南门”。
+     * 楼梯口、卫生间这类不是“人可能站的地方”的元素排除在外，
+     * 避免默认位置显示成“东楼梯口”。
      */
     fun nearestStandableElement(floor: Floor, point: LngLat): Element? {
         val usable = floor.elements.filter { it.elementType in STANDABLE_TYPES }
@@ -109,7 +110,9 @@ class CampusRepository private constructor(
         for (building in buildings) {
             for (floor in building.floors) {
                 for (element in floor.elements) {
-                    if (element.elementType == ElementType.Entrance) continue
+                    // 卫生间不作为导航目标：没人需要「导航到卫生间」，
+                    // 而且它在数据里大量重复（每层都有），会淹没真正的目标
+                    if (element.elementType == ElementType.Toilet) continue
                     val base = scoreName(element.name, key) ?: continue
 
                     var score = base
@@ -257,32 +260,19 @@ class CampusRepository private constructor(
                 )
             }
 
-            // 按层合并：配置里画过的层替换，没画过的层原样保留
-            val draftByLevel = draft.floors.associateBy { it.level }
+            // 按层合并：配置里画过的层替换，没画过的层原样保留。
+            // 注意要用 toBuilding() 的结果：跨层元素（楼梯）会在它覆盖的
+            // 每一层都展开出一份，直接读 draft.floors 会漏掉展开出来的层。
+            val fromDraft = draft.toBuilding()
+            val draftByLevel = fromDraft.floors.associateBy { it.level }
             val mergedFloors = existing.floors.map { floor ->
-                val draftFloor = draftByLevel[floor.level] ?: return@map floor
-                val elements = draftFloor.elements.filter { it.isValid }.map { it.toElement() }
-                if (elements.isEmpty()) floor else floor.copy(elements = elements)
+                draftByLevel[floor.level] ?: floor
             }
 
-            // assets 里没有的楼层（例如用户新建了一层）也加进来，
-            // 相对高度按「层号差 × 假定层高」估算，保证递增关系成立
+            // 展开后出现、但 assets 里没有的楼层（例如用户新建了一层，
+            // 或楼梯跨到了原数据没有的层）也加进来
             val existingLevels = existing.floors.map { it.level }.toSet()
-            val extraFloors = draft.floors
-                .filter { it.level !in existingLevels }
-                .mapNotNull { draftFloor ->
-                    val elements = draftFloor.elements.filter { it.isValid }.map { it.toElement() }
-                    if (elements.isEmpty()) {
-                        null
-                    } else {
-                        Floor(
-                            id = "${existing.id}_${draftFloor.level}F",
-                            level = draftFloor.level,
-                            relativeHeightM = draftFloor.level * ASSUMED_FLOOR_HEIGHT_M,
-                            elements = elements,
-                        )
-                    }
-                }
+            val extraFloors = fromDraft.floors.filter { it.level !in existingLevels }
 
             return existing.copy(
                 name = draft.name.ifBlank { existing.name },
@@ -290,18 +280,6 @@ class CampusRepository private constructor(
                 floors = (mergedFloors + extraFloors).sortedBy { it.level },
             )
         }
-
-        /**
-         * 编辑器新增楼层时假定的层高（米）。
-         *
-         * 是估算值：编辑器只画平面位置，不测高度。用户要精确值应当回 assets
-         * 或后续版本的编辑器里改。留这个常量是为了让 `relative_height_m`
-         * 保持递增，否则楼层自检会报错、气压计判层也会错。
-         */
-        const val ASSUMED_FLOOR_HEIGHT_M = 4.0
-
-        /** 楼栋多边形至少需要几个点（少于 3 个点围不成面）。 */
-        const val MIN_BUILDING_POLYGON_POINTS = 3
 
         /** 合并的产物：仓库本身 + 编辑器配置 + 合并告警。 */
         data class Merged(

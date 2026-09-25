@@ -62,22 +62,19 @@ object Fixtures {
     fun stair(name: String, x1: Double, width: Double = 4.0): Element =
         makeElement(name, ElementType.Stair, x1, -9.0, x1 + width, -1.0)
 
-    fun elevator(name: String, x1: Double, width: Double = 4.0): Element =
-        makeElement(name, ElementType.Elevator, x1, -9.0, x1 + width, -1.0)
-
-    fun entrance(name: String, x1: Double, width: Double = 4.0): Element =
-        makeElement(name, ElementType.Entrance, x1, -1.0, x1 + width, 1.0)
+    fun toilet(name: String, x1: Double, width: Double = 4.0): Element =
+        makeElement(name, ElementType.Toilet, x1, -9.0, x1 + width, -1.0)
 
     /**
-     * 一层的标准布局，与 assets 数据保持同样的相对顺序：
+     * 一层的标准布局。
      *
-     *       北侧：语文教研室 数学教研室 英语教研室 历史教研室 地理教研室
-     *   ─────────────────── 走廊 ───────────────────
-     *       南侧：南门 东楼梯口 计算机房 多媒体教室 语音教室 电梯口
+     * 北侧 5 间教室，南侧「东楼梯口 + 若干教室 + 卫生间」，中间是走廊。
+     * 布局是刻意设计的：
+     *  - 「卫生间」与北侧最后一间教室**同经度**（都从 x=11 开始、宽 8，中心 x=15），
+     *    用来覆盖排序的次级键：同一投影位置时北侧优先；
+     *  - 南侧最靠西的是楼梯口，作为跨层换乘点。
      *
-     * 从西向东的完整走廊顺序是：
-     *   南门 -> 东楼梯口 -> 语文教研室 -> 计算机房 -> 数学教研室 -> 多媒体教室
-     *   -> 英语教研室 -> 语音教室 -> 历史教研室 -> 电梯口 -> 地理教研室
+     * 入口（entrance）与电梯口（elevator）两种类型已从数据模型删除，这里不再生成。
      */
     fun standardFloor(
         id: String,
@@ -87,15 +84,16 @@ object Fixtures {
         southRooms: List<String>,
     ): Floor {
         val elements = mutableListOf<Element>()
+        // 北侧教室：x 中心依次是 -16 / -8 / 0 / 8 / 16
         northNames.forEachIndexed { index, name ->
             elements += northRoom(name, -20.0 + index * 8.0)
         }
-        elements += entrance("南门", -26.0)
         elements += stair("东楼梯口", -22.0)
         southRooms.forEachIndexed { index, name ->
             elements += southRoom(name, -18.0 + index * 8.0)
         }
-        elements += elevator("电梯口", -18.0 + southRooms.size * 8.0)
+        // 卫生间中心 x=15，与北侧最后一间教室对齐
+        elements += toilet("卫生间", 11.0, width = 8.0)
 
         return Floor(
             id = id,

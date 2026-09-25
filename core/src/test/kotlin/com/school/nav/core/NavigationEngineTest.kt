@@ -114,11 +114,11 @@ class NavigationEngineTest {
     }
 
     @Test
-    fun `从走廊入口出发时按目标所在侧给方位`() {
-        // 南门位于走廊正中（横向偏移约 0），数学教研室在北侧。
+    fun `从走廊正中出发时按目标所在侧给方位`() {
+        // 东楼梯口贴走廊（横向偏移小），数学教研室在北侧。
         // 两者不在同一侧，因此按目标的实际方位给出左右。
         val result = engine.route(
-            current = position(buildingA, 1, "南门"),
+            current = position(buildingA, 1, "东楼梯口"),
             target = target(buildingA, 1, "数学教研室"),
         )
         assertTrue("实际文案：${result.plainText}", result.plainText.contains("在左手边"))
