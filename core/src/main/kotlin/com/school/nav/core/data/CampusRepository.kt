@@ -28,15 +28,29 @@ data class SearchHit(
 /**
  * 楼栋数据仓库。
  *
- * MVP 用打包在 assets 里的静态 JSON（零后端）。本类只依赖 JSON 字符串，
- * 由 app 模块负责从 assets 读出来喂进来，因此可以脱离 Android 做单元测试。
+ * 数据来源有两层：
+ *  1. **assets 里的静态 JSON**（零后端、编译期打包）—— 内置的完整数据，有楼层有元素；
+ *  2. **地图编辑器导出的配置文件**（运行期写入应用私有目录）—— 目前只有楼栋外轮廓。
+ *
+ * 两层由 [Companion.create] 合并：assets 打底，配置覆盖同名楼栋的几何。
+ * 本类只依赖 JSON 字符串与已解析的数据，由 app 模块负责文件 IO，
+ * 因此可以脱离 Android 做单元测试。
  */
-class CampusRepository(
-    json: String,
-    private val jsonParser: Json = DefaultJson,
+class CampusRepository private constructor(
+    val data: CampusData,
+    val jsonParser: Json,
+    /** 合并过程中发现的问题（例如新加的楼栋还没有楼层），供 UI 与日志展示。 */
+    val mergeWarnings: List<String> = emptyList(),
 ) {
 
-    val data: CampusData = jsonParser.decodeFromString(CampusData.serializer(), json)
+    /** 兼容旧用法：直接给一段 JSON。 */
+    constructor(
+        json: String,
+        jsonParser: Json = DefaultJson,
+    ) : this(
+        data = jsonParser.decodeFromString(CampusData.serializer(), json),
+        jsonParser = jsonParser,
+    )
 
     val buildings: List<Building> get() = data.buildings
 
@@ -138,8 +152,7 @@ class CampusRepository(
     }
 
     /** 数据自检：楼层高度是否递增、多边形的点是否足够。返回问题列表。 */
-    fun validate(): List<String> {
-        val problems = mutableListOf<String>()
+    fun validate(): List<String> {        val problems = mutableListOf<String>()
         if (buildings.isEmpty()) problems += "没有任何楼栋数据"
 
         for (building in buildings) {
@@ -199,6 +212,102 @@ class CampusRepository(
         val DefaultJson: Json = Json {
             ignoreUnknownKeys = true
             isLenient = true
+        }
+
+        /**
+         * 把编辑器产出的楼栋轮廓合并进一份校园数据。
+         *
+         * 规则（顺序很重要）：
+         *  1. **assets 打底**：内置数据始终是完整的（有楼层、有元素）；
+         *  2. **配置覆盖同名楼栋的几何与名称**：id 相同视为同一栋楼，
+         *     用编辑器画的 `polygon` 替换掉原来的，`name` 若配置里非空也一并替换；
+         *  3. **保留原有楼层**：编辑器当前只画外轮廓，不产出楼层。
+         *     如果这里把 floors 清空，"覆盖"就变成了"把楼废掉"——楼栋定位还能用，
+         *     但楼层与元素全没了，导航直接失效。所以**新轮廓 + 老楼层**才是正确合并；
+         *  4. **新增配置里有、assets 里没有的楼栋**：以空楼层加入，并附一条自检问题，
+         *     提醒数据还不完整（这类楼只能用于楼栋定位，不能导航）。
+         *
+         * 不做原地修改：数据可能被多处以 `StateFlow` 持有，产出新对象更安全。
+         */
+        fun mergeEditorBuildings(
+            base: CampusData,
+            outlines: List<BuildingOutline>,
+            minPolygonPoints: Int = MIN_BUILDING_POLYGON_POINTS,
+        ): CampusData {
+            if (outlines.isEmpty()) return base
+
+            val incoming = outlines.associateBy { it.id }
+            val merged = base.buildings.map { existing ->
+                val outline = incoming[existing.id] ?: return@map existing
+                if (!outline.isValid) return@map existing
+                existing.copy(
+                    name = outline.name.ifBlank { existing.name },
+                    polygon = outline.polygon,
+                )
+            }
+
+            val added = outlines
+                .filter { it.isValid && base.buildings.none { b -> b.id == it.id } }
+                .map { it.toBuilding(floors = emptyList()) }
+
+            return base.copy(buildings = merged + added)
+        }
+
+        /** 楼栋多边形至少需要几个点（少于 3 个点围不成面）。 */
+        const val MIN_BUILDING_POLYGON_POINTS = 3
+
+        /** 合并的产物：仓库本身 + 编辑器配置 + 合并告警。 */
+        data class Merged(
+            val repository: CampusRepository,
+            val editorConfig: EditorConfig,
+            val warnings: List<String>,
+        )
+
+        /**
+         * 按「assets 打底 + 编辑器配置覆盖」构建仓库。
+         *
+         * @param assetJson        assets 里的 buildings.json
+         * @param editorConfigJson 编辑器导出的配置；为空或损坏时只用 assets
+         */
+        fun create(
+            assetJson: String,
+            editorConfigJson: String?,
+            jsonParser: Json = DefaultJson,
+        ): Merged {
+            val base = jsonParser.decodeFromString(CampusData.serializer(), assetJson)
+            val editorConfig = editorConfigJson
+                ?.let { EditorConfigCodec.decode(it) }
+                ?: EditorConfig()
+
+            val warnings = mutableListOf<String>()
+
+            // 只保留有效轮廓：画歪了 / 少于三个点的直接丢掉，并说清楚丢了几条
+            val valid = editorConfig.buildings.filter { it.isValid }
+            val dropped = editorConfig.buildings.size - valid.size
+            if (dropped > 0) {
+                warnings += "编辑器配置里有 $dropped 个楼栋轮廓无效（少于 3 个点或点重合），已忽略。"
+            }
+
+            val merged = mergeEditorBuildings(base, valid)
+
+            // 新加入的楼栋还没有楼层：楼栋定位能用，但导航用不了，必须提示
+            val newBuildings = merged.buildings.filter { b ->
+                valid.any { it.id == b.id } && base.buildings.none { it.id == b.id }
+            }
+            if (newBuildings.isNotEmpty()) {
+                warnings += newBuildings.joinToString("、") { it.name } +
+                    " 只有外轮廓、还没有楼层数据，暂时不能用于室内导航。"
+            }
+
+            return Merged(
+                repository = CampusRepository(
+                    data = merged,
+                    jsonParser = jsonParser,
+                    mergeWarnings = warnings,
+                ),
+                editorConfig = editorConfig.copy(buildings = valid),
+                warnings = warnings,
+            )
         }
 
         /** “默认当前位置”允许出现的元素类型：人真正可能站的地方。 */

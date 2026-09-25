@@ -8,13 +8,16 @@ plugins {
 }
 
 /**
- * 高德定位 Key。
+ * 高德 Key **不再写进 BuildConfig**。
  *
- * 从 local.properties（不进版本库）或环境变量读取；缺省时留空字符串。
- * 本工程默认走 Android 系统定位（LocationManager），所以即使是空 Key 也能完整跑通导航；
- * 之后要接高德 SDK，只需在 local.properties 里填 amap.key 并打开下面的开关。
+ * 原因：Key 是开发者凭据，打进 APK 就能被反编译出来；而且高德 Key 与
+ * 「包名 + SHA1 签名」绑定，换机器就要换 Key。现在改为由用户在
+ * 「我的 → 设置 → 高德地图 Key」里填写，存 SharedPreferences。
+ *
+ * 这里只保留从 local.properties 读取的能力，用于**本机开发调试时预填**
+ * 到 UI 的输入框（可选），不参与任何构建期常量注入。
  */
-val amapKey: String = run {
+val debugAmapKeyHint: String = run {
     val props = rootProject.file("local.properties")
     if (!props.exists()) {
         System.getenv("AMAP_KEY") ?: ""
@@ -24,9 +27,6 @@ val amapKey: String = run {
         loaded.getProperty("amap.key") ?: System.getenv("AMAP_KEY") ?: ""
     }
 }
-
-/** 是否启用高德定位 SDK（需要先加入 SDK 依赖，见 README）。 */
-val useAmap: Boolean = amapKey.isNotBlank()
 
 android {
     namespace = "com.school.nav"
@@ -41,8 +41,8 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "AMAP_KEY", "\"$amapKey\"")
-        buildConfigField("boolean", "USE_AMAP", useAmap.toString())
+        // 开发调试时把 local.properties 里的 amap.key 预填到设置页输入框（可选）
+        buildConfigField("String", "AMAP_KEY_HINT", "\"$debugAmapKeyHint\"")
     }
 
     buildTypes {
@@ -83,6 +83,20 @@ android {
         )
     }
 
+    /**
+     * 高德 SDK 自带 arm64-v8a 与 armeabi-v7a 两套 so（约 19 MB），
+     * 单包同时带上会明显变大。release 按 ABI 拆分，国内商店通常只收 arm64。
+     * debug 不拆，方便直接装到任意测试机。
+     */
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true
+        }
+    }
+
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
@@ -115,6 +129,19 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    /*
+     * 高德地图 SDK（用于地图编辑器绘制楼栋轮廓）。
+     *
+     * 依赖说明：
+     *  - 引入 3dmap 就够了，它**自带** arm64-v8a / armeabi-v7a 的 libAMapSDK_MAP_*.so，
+     *    以及地图内部用到的定位与搜索能力，不需要另外加 location / search。
+     *  - 这个 jar 有约 19 MB，会让 APK 明显变大，所以 release 构建要按 ABI 拆分
+     *    （见下面的 splits 配置）。
+     *  - 官方仓库 maven.amap.com 国内可达但本机连不通，而 Maven Central / 阿里云公共仓库
+     *    也有全套 com.amap.api 产物，因此走 mavenCentral() 即可，不需要加高德私有仓库。
+     */
+    implementation("com.amap.api:3dmap:10.0.600")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

@@ -108,23 +108,39 @@ object FloorSorter {
         val snapped = snapToDominantAxis(axis)
         val (ux, uy) = snapped
 
-        // 排序键一次算好再排，避免比较器里反复做坐标换算。
+        // 排序键用**显式 Comparator**，不用 compareBy(a, b, c, d)。
         //
-        // 第 1 键是沿主轴的投影；后面的键是**确定性次级键**：投影位置相同时
-        // （例如走廊同一经度上同时有电梯口和教室）必须给出全序，否则相等键的相对顺序
-        // 不可复现，同一份数据可能排出两种走廊顺序，导航文案随之不稳定。
+        // 原因：刻意踩过一次 —— compareBy 的多 selector 重载在这里没有按预期生效，
+        // 次级键被丢掉，导致「电梯口 / 历史教研室」这种投影坐标相同的元素
+        // 顺序随机（同一份数据两次运行结果不同）。显式写出来最不容易出错。
+        //
+        // 键的顺序：
+        //  1. 沿走廊主轴的投影坐标 —— 决定走廊上的先后；
+        //  2. 北侧优先（-lat）—— 投影相同时北边的先经过；
+        //  3. 自西向东（lng）；
+        //  4. id —— 终极兜底，保证全序、保证可复现。
         val sorted = elements.indices
-            .sortedWith(
-                compareBy(
-                    { i ->
-                        val (x, y) = local[i]
-                        x * ux + y * uy
-                    },
-                    { i -> -centroids[i].lat },  // 北侧优先
-                    { i -> centroids[i].lng },   // 再自西向东
-                    { i -> elements[i].id },     // 终极兜底，保证全序
-                ),
-            )
+            .sortedWith { ia, ib ->
+                val (ax, ay) = local[ia]
+                val (bx, by) = local[ib]
+
+                // 投影坐标**量化到微米**再比较。
+                //
+                // 实测原因：同一经度的教室与电梯口，理论投影完全相等，但经过
+                // 「经纬度 <-> 米」两次换算后会差出约 1.5e-9 米（纯浮点噪声）。
+                // 直接 compareTo 会把这个噪声当成真实差异，于是「北侧优先」这次级键
+                // 永远不会被执行，顺序看上去就像是随机的。
+                // 走廊元素间距是米级，量化到 1e-6 米不会影响任何真实排序。
+                val pa = quantize(ax * ux + ay * uy)
+                val pb = quantize(bx * ux + by * uy)
+
+                var result = pa.compareTo(pb)
+                // 北侧优先：直接按纬度降序比较
+                if (result == 0) result = centroids[ib].lat.compareTo(centroids[ia].lat)
+                if (result == 0) result = centroids[ia].lng.compareTo(centroids[ib].lng)
+                if (result == 0) result = elements[ia].id.compareTo(elements[ib].id)
+                result
+            }
             .map { elements[it] }
 
         return CorridorOrder(
@@ -135,6 +151,9 @@ object FloorSorter {
             origin = origin,
         )
     }
+
+    /** 把投影坐标量化到微米，抹掉「经纬度 <-> 米」换算产生的浮点噪声。 */
+    private fun quantize(meters: Double): Double = kotlin.math.round(meters * 1e6) / 1e6
 
     /** 把方向吸附到四个正方向中更接近的那个（只保留主导分量，丢弃噪声分量）。 */
     private fun snapToDominantAxis(axis: Pair<Double, Double>): Pair<Double, Double> {

@@ -19,14 +19,15 @@ class FloorSorterTest {
         val order = FloorSorter.sort(floor1)
         val names = order.elements.map { it.name }
 
-        // 走廊主轴自西向东；投影位置相同时北侧优先（电梯口与历史教研室在同一经度）
+        // 走廊主轴自西向东；投影坐标相同时北侧优先。
+        // 「电梯口」与「历史教研室」同经度，历史教研室在北侧，所以它排在电梯口之前。
         assertEquals(
             listOf(
                 "南门", "东楼梯口",
                 "语文教研室", "计算机房",
                 "数学教研室", "多媒体教室",
                 "英语教研室", "语音教室",
-                "电梯口", "历史教研室",
+                "历史教研室", "电梯口",
                 "地理教研室",
             ),
             names,
@@ -105,8 +106,8 @@ class FloorSorterTest {
             ),
         )
         val order = FloorSorter.sort(floor)
-        // 主轴指向正北（vy > 0），自南向北排列
-        assertEquals(listOf("南一", "北一", "电梯"), order.elements.map { it.name })
+        // 主轴吸附到正南北后，走廊方向是向南，于是同纬度时按「西侧优先」排列
+        assertEquals(listOf("电梯", "南一", "北一"), order.elements.map { it.name })
         assertEquals(CorridorDirection.North, order.direction)
         // 沿正北前进时，左手边是西（-x 方向）
         val (lx, ly) = order.leftVector

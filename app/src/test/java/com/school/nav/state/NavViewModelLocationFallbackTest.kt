@@ -232,9 +232,18 @@ class NavViewModelLocationFallbackTest {
         val state = vm.uiState.value
         assertTrue("手动指定后应能组成完整位置", state.isPositionComplete)
         assertEquals("A栋 · 1楼 · 语文教研室", state.positionText)
-        // 手动给了位置后，定位不可用的提示不再有意义
+        // 手动给了位置后，定位不可用的原因被清掉，
+        // 位置卡片的提示也从「没有定位权限…」换成「已按你的修改定位…」
         org.junit.Assert.assertNull(state.locationUnavailable)
-        org.junit.Assert.assertNull("不应再提示定位问题", positionHint(state))
+        val hint = positionHint(state)
+        assertFalse(
+            "不应再提示定位不可用，实际：$hint",
+            hint != null && hint.contains("定位权限"),
+        )
+        assertTrue(
+            "应提示这是用户手动指定的位置，实际：$hint",
+            hint != null && hint.contains("已按你的修改定位"),
+        )
 
         // 搜索并导航：仍然能算出文字导航
         vm.navigateToName("物理实验室")

@@ -1,0 +1,56 @@
+feat: 地图编辑器地基（存储层 + 数据合并），并修掉长期失败的排序断言
+
+## 高德 SDK 接入可行性（推翻之前的错误结论）
+
+之前 README 与 AmapLocationSource 注释里写「高德 aar 只在自己仓库分发、拉不到」，
+所以改成了反射接入。实测这是**错的**：官方仓库 maven.amap.com 确实连不通，
+但 Maven Central / 阿里云公共仓库有全套 com.amap.api 产物：
+
+- com.amap.api:3dmap 5.0.0 -> 10.0.600（54 个版本，现代包名 com.amap.api.maps）
+- com.amap.api:map2d 只有 6.0.0（老 2D SDK，包名 maps2d，已停更，不用）
+- com.amap.api:location 3.x -> 11.3.000
+
+已下载 3dmap-10.0.600.jar 验证：18.9 MB、1174 个类、**自带 arm64-v8a 与
+armeabi-v7a 的 libAMapSDK_MAP_*.so**，AMap / MapView / PolygonOptions / LatLng /
+Projection 等类齐全。因此地图编辑器用 3dmap 依赖接入，不再需要反射。
+
+## 存储层
+
+- ApiKeyStore：高德 Key 改由用户在设置页填写，存 SharedPreferences。
+  刻意不用 DataStore：SDK 要在 Application.onCreate 同步拿 Key，而 DataStore 是挂起 API。
+  Key 也不写进 BuildConfig —— 打进 APK 能被反编译出来。
+- EditorConfig / EditorConfigCodec（core）：编辑器产物的数据模型与 JSON 编解码，
+  解析失败返回 null 而不是抛异常，一个坏文件不该让 App 起不来。
+- EditorConfigStore：**内部 + 外部双写**。内部 /data/data/<包名>/files/config/ 是
+  权威数据，外部 /sdcard/Android/data/<包名>/files/config/ 是给用户取走的副本 ——
+  未 root 的真机拿不到内部目录，而这份数据要导回工程。写 app-specific 外部目录
+  不需要任何存储权限。外部写失败只降级为 warning，不影响整体成功。
+  先写 .tmp 再 rename，避免写一半留下坏 JSON。
+
+## 数据合并
+
+CampusRepository.create：**assets 打底 + 配置覆盖同名楼栋的几何、保留原楼层**。
+保留楼层是关键 —— 编辑器目前只画外轮廓，若把 floors 一起覆盖，
+「覆盖」就变成「把楼废掉」：楼栋定位还在，导航全失效，而且不会崩，极难发现。
+配置新增的楼栋以空楼层加入并给出告警（只能定位、不能导航）。
+
+## 顺带修掉两个长期失败的排序断言
+
+根因是浮点噪声：同经度的「电梯口」与「历史教研室」理论投影完全相等，
+但经纬度<->米两次换算后差约 1.5e-9 米，直接 compareTo 会把它当真实差异，
+于是「北侧优先」这一次级键永远不执行，排序结果不可复现。
+改为把投影坐标量化到微米再比较（走廊元素间距是米级，不影响真实排序），
+并用显式 Comparator 替代 compareBy 多 selector 重载。
+
+## 构建配置
+
+- 去掉 AMAP_KEY / USE_AMAP 的 buildConfigField（Key 不再编译期注入）
+- release 按 ABI 拆分，避免两套 so 让包体过大
+- gradle.properties：取消独立 Kotlin 编译进程改为进程内编译，
+  并把堆调到 2560m —— 之前 Gradle 守护进程在执行构建瞬间被外部杀掉，
+  特征是 Gradle + Kotlin 两个 JVM 同时占内存。
+
+## 验证
+
+:core:test 与 :app:testDebugUnitTest 全部通过（含新增 EditorConfigMergeTest 12 例、
+EditorConfigStoreTest 12 例）。UI 部分（设置页、地图编辑器页）尚未实现。
