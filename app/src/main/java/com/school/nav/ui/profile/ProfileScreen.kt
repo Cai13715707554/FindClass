@@ -50,6 +50,7 @@ import java.util.Locale
 @Composable
 fun ProfileScreen(
     state: NavUiState,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(
         start = 12.dp,
@@ -76,6 +77,44 @@ fun ProfileScreen(
                 .fillMaxWidth()
                 .padding(bottom = 4.dp),
         )
+
+        // ---- 设置入口 ----
+        NavCard(modifier = Modifier.testTag(TestTags.SettingsEntry)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onOpenSettings,
+                    )
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text(
+                        text = "设置",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = NavColors.TextPrimary,
+                    )
+                    Text(
+                        text = "高德地图 Key（地图编辑器需要）",
+                        fontSize = 13.sp,
+                        color = NavColors.TextSecondary,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                Text(
+                    text = "进入",
+                    fontSize = 14.sp,
+                    color = NavColors.Brand,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
 
         // ---- 测试入口 ----
         TestEntryCard(

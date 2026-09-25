@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
@@ -34,12 +35,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.school.nav.ui.theme.NavColors
 
-/** 底部导航的两个页签。 */
+/** 底部导航的页签。 */
 enum class NavTab(
     val label: String,
     val icon: ImageVector,
 ) {
     Home("首页", Icons.Filled.Home),
+    Map("地图", Icons.Filled.Edit),
     Profile("我的", Icons.Filled.Person),
 }
 

@@ -21,13 +21,25 @@
 
 | 项目 | 状态 |
 | --- | --- |
-| Debug APK 构建 | ✅ 成功（`app/build/outputs/apk/debug/app-debug.apk`，约 20.9 MB） |
-| `:app` 编译（Compose + Kotlin） | ✅ 通过 |
-| `:core` 单元测试 | ⚠️ **63 个用例，3 个断言待复跑验证**（详见第七节） |
-| 定位不可用兜底修复 | ⚠️ 已实现 + 已补测试，**未编译验证**（详见 7.2） |
+| Debug APK 构建 | ✅ 成功（`app/build/outputs/apk/debug/`，按 ABI 拆分 + universal） |
+| `:core` / `:app` 单元测试 | ✅ **全部通过**（含排序、文案、存储、合并、编辑器状态机） |
+| 地图编辑器（绘制楼栋轮廓） | ✅ 已实现，⚠️ **未在真机验证地图渲染**（需要你自己的高德 Key） |
 | 真机验证（GPS / 气压计 / 权限） | ❌ 未做（本机无设备，见 7.3） |
 
-> ⚠️ 请先看**第七节「已知问题」**，那里写清了剩下的 3 个断言、未编译验证的改动，以及为什么 `No target device found`。
+> ⚠️ 请先看**第七节「已知问题」**，那里写清了未验证的部分，以及为什么 `No target device found`。
+
+## 一·一、导航结构
+
+底部是胶囊悬浮导航，三个页签：
+
+| 页签 | 内容 |
+| --- | --- |
+| **首页** | 当前位置卡片（三级可改）+ 搜索/快捷目标 + 文字导航 |
+| **地图** | 地图编辑器：在真实高德地图上点选楼栋外轮廓，命名后保存并自动导入 |
+| **我的** | 设置入口（填高德 Key）+ 定位测试（实时经纬度、精度、来源、高度）+ 关于 |
+
+**首次使用地图编辑器前必须先填高德 Key**：进入「我的 → 设置」粘贴 Key。
+没填时地图页不会白屏，而是显示引导和「去设置里填写 Key」按钮。
 
 ---
 
@@ -94,31 +106,40 @@ node tools/gen-buildings-json.mjs
 # 楼栋 2 栋 / 楼层 6 层 / 元素 58 个
 ```
 
-### 2.4 接入高德定位（可选）
+### 2.4 高德地图 / 定位（重要更正）
 
-MVP 默认走 **Android 系统定位**（`LocationManager`），不引第三方 SDK 也能完整跑通导航。
-要换成技术方案指定的高德定位：
+**之前的 README 写「高德 aar 只在自己仓库分发、网络受限拉不到」，这是错的。**
 
-1. 在 `local.properties` 填入 Key：
+实测结论：
 
-   ```properties
-   amap.key=你的高德Key
-   ```
+| 仓库 | 结果 |
+| --- | --- |
+| `maven.amap.com`（高德官方） | ❌ 连接超时 |
+| **Maven Central / 阿里云公共仓库** | ✅ **全套 `com.amap.api` 产物都在** |
 
-2. 在 `app/build.gradle.kts` 里加高德仓库与依赖（**只需加依赖，业务代码不用改**）：
+可用产物：
 
-   ```kotlin
-   repositories {
-       maven { url = uri("https://maven.aliyun.com/repository/public") }
-   }
-   dependencies {
-       implementation("com.amap.api:location:6.4.5")
-   }
-   ```
+| artifactId | 可用版本 | 说明 |
+| --- | --- | --- |
+| `com.amap.api:3dmap` | 5.0.0 → **10.0.600**（54 个版本） | ✅ 地图编辑器用的就是它，现代包名 `com.amap.api.maps` |
+| `com.amap.api:map2d` | 只到 6.0.0 | ❌ 老版 2D SDK，包名 `com.amap.api.maps2d`，已停更，不要用 |
+| `com.amap.api:location` | 3.x → 11.3.000 | ✅ 可用 |
 
-`AmapLocationSource` 是用**反射**写的，检测到 SDK 存在且 Key 非空就自动启用
-（`BuildConfig.USE_AMAP`），否则自动落回系统定位。高德 SDK 的隐私合规声明
-（`updatePrivacyShow` / `updatePrivacyAgree`）已在反射初始化里调用。
+已验证 `3dmap-10.0.600.jar`：18.9 MB / 1174 个类，**自带 `arm64-v8a` 与
+`armeabi-v7a` 的 `libAMapSDK_MAP_*.so`**。因此只需一句依赖，不需要加高德私有仓库：
+
+```kotlin
+implementation("com.amap.api:3dmap:10.0.600")
+```
+
+**Key 由用户在「我的 → 设置」里填写**，存本机 SharedPreferences：
+
+- 不写进 `BuildConfig`：Key 打进 APK 可以被反编译出来；
+- 高德 Key 与「包名 + 签名 SHA1」绑定，换机器 / 换签名就要换 Key，
+  让用户现场填比每次改代码重新打包务实；
+- debug 与 release 签名不同，两个都要在高德控制台各自添加，否则报 `INVALID_USER_KEY`。
+
+定位通道仍然是「有 Key 就用高德、没 Key 用系统定位」，见 `AppContainer`。
 
 ---
 

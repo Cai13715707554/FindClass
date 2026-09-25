@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -21,16 +22,20 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.school.nav.AppContainer
+import com.school.nav.core.data.BuildingOutline
+import com.school.nav.state.MapEditorViewModel
 import com.school.nav.state.NavViewModel
 import com.school.nav.ui.components.BottomNavBar
 import com.school.nav.ui.components.NavBarSpace
 import com.school.nav.ui.components.NavTab
 import com.school.nav.ui.components.TestTags
+import com.school.nav.ui.editor.MapEditorScreen
 import com.school.nav.ui.profile.ProfileScreen
+import com.school.nav.ui.settings.SettingsScreen
 import com.school.nav.ui.theme.NavColors
 
 /**
- * 应用外壳：底部导航 + 两个页面（首页 / 我的）。
+ * 应用外壳：底部导航 + 三个页面（首页 / 地图 / 我的），外加一个设置子页。
  *
  * ## 为什么不用「两个页面都留在组合树里、只切 alpha」
  *
@@ -46,18 +51,32 @@ import com.school.nav.ui.theme.NavColors
  * 于是滚动位置、搜索框内容都不会丢 —— 既有正确的命中测试，
  * 又不需要用可见性 hack 去骗触摸系统。
  *
- * 注意：`SaveableStateHolder` 只保存 `rememberSaveable` 的状态。
- * 页面里用普通 `remember` 的东西（比如“定位测试”的展开状态）应该改成
- * `rememberSaveable`，否则切页会重置。
+ * 设置页作为「我的」的子页面，用独立的 `showSettings` 标记；
+ * 点底部导航会关掉它，符合用户对 Tab 的预期。
  */
 @Composable
 fun AppShell(container: AppContainer) {
-    val viewModel: NavViewModel = viewModel(factory = NavViewModel.factory(container))
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val navViewModel: NavViewModel = viewModel(factory = NavViewModel.factory(container))
+    val editorViewModel: MapEditorViewModel =
+        viewModel(factory = MapEditorViewModel.factory(container))
+
+    val navState by navViewModel.uiState.collectAsStateWithLifecycle()
+    val editorState by editorViewModel.uiState.collectAsStateWithLifecycle()
+    val referenceBuildings = remember {
+        editorViewModel.existingBuildings.value.map { building ->
+            BuildingOutline(
+                id = building.id,
+                name = building.name,
+                polygon = building.polygon,
+            )
+        }
+    }
+
     val snackbarHostState = remember { SnackbarHostState() }
 
     // 存序号而不是直接存枚举：枚举不是自动可保存类型，存序号再还原最简单
     var selectedIndex by rememberSaveable { mutableIntStateOf(NavTab.Home.ordinal) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     val selectedTab = NavTab.entries[selectedIndex]
 
     val stateHolder = rememberSaveableStateHolder()
@@ -66,10 +85,12 @@ fun AppShell(container: AppContainer) {
     val horizontalPadding = 12.dp
     val topPadding = 24.dp
 
-    LaunchedEffect(viewModel) {
-        viewModel.toasts.collect { message ->
-            snackbarHostState.showSnackbar(message.text)
-        }
+    // 导航与地图编辑器的提示都走同一个 Snackbar
+    LaunchedEffect(navViewModel) {
+        navViewModel.toasts.collect { snackbarHostState.showSnackbar(it.text) }
+    }
+    LaunchedEffect(editorViewModel) {
+        editorViewModel.messages.collect { snackbarHostState.showSnackbar(it) }
     }
 
     Scaffold(
@@ -78,8 +99,10 @@ fun AppShell(container: AppContainer) {
         modifier = Modifier.testTag(TestTags.AppShell),
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize()) {
-            // 只组合当前页；用 key 让 SaveableStateHolder 区分两个页面的状态
-            stateHolder.SaveableStateProvider(key = selectedTab.name) {
+            // key 里带上 showSettings：设置页与「我的」是两个不同的可保存状态
+            val pageKey = if (showSettings) "settings" else selectedTab.name
+
+            stateHolder.SaveableStateProvider(key = pageKey) {
                 val contentPadding = PaddingValues(
                     start = horizontalPadding,
                     end = horizontalPadding,
@@ -87,31 +110,60 @@ fun AppShell(container: AppContainer) {
                     bottom = NavBarSpace,
                 )
 
-                when (selectedTab) {
-                    NavTab.Home -> HomeScreen(
-                        state = state,
-                        buildings = viewModel.buildings(),
-                        quickTargets = remember { viewModel.quickTargets() },
-                        onSuggest = { keyword -> viewModel.search(keyword) },
-                        onNavigate = { name -> viewModel.navigateToName(name) },
-                        onEditConfirm = { building, floor, element ->
-                            viewModel.applyManualPosition(building, floor, element)
-                        },
-                        onRelocate = { viewModel.relocate() },
+                when {
+                    showSettings -> SettingsScreen(
+                        currentKey = editorState.apiKey,
+                        onSaveKey = { editorViewModel.saveApiKey(it) },
+                        onClearKey = { editorViewModel.clearApiKey() },
+                        onBack = { showSettings = false },
                         contentPadding = contentPadding,
                     )
 
-                    NavTab.Profile -> ProfileScreen(
-                        state = state,
+                    selectedTab == NavTab.Home -> HomeScreen(
+                        state = navState,
+                        buildings = navViewModel.buildings(),
+                        quickTargets = remember { navViewModel.quickTargets() },
+                        onSuggest = { keyword -> navViewModel.search(keyword) },
+                        onNavigate = { name -> navViewModel.navigateToName(name) },
+                        onEditConfirm = { building, floor, element ->
+                            navViewModel.applyManualPosition(building, floor, element)
+                        },
+                        onRelocate = { navViewModel.relocate() },
+                        contentPadding = contentPadding,
+                    )
+
+                    selectedTab == NavTab.Map -> MapEditorScreen(
+                        state = editorState,
+                        referenceBuildings = referenceBuildings,
+                        onMapClick = { editorViewModel.addPoint(it) },
+                        onUndo = { editorViewModel.undoPoint() },
+                        onFinish = { editorViewModel.finishDraft() },
+                        onCancelDraft = { editorViewModel.cancelDraft() },
+                        onNameChange = { editorViewModel.setDraftName(it) },
+                        onRemove = { editorViewModel.removeOutline(it) },
+                        onSave = { editorViewModel.save() },
+                        onReload = { editorViewModel.reload() },
+                        onGoSettings = { showSettings = true },
+                        contentPadding = contentPadding,
+                    )
+
+                    else -> ProfileScreen(
+                        state = navState,
+                        onOpenSettings = { showSettings = true },
                         contentPadding = contentPadding,
                     )
                 }
             }
 
-            // 悬浮底部导航：放在页面之后，保证它画在最上层且始终可点
+            // 悬浮底部导航：放在页面之后，保证它画在最上层且始终可点。
+            // 在设置页里也显示（点任意 Tab 会退出设置页），避免出现「没有退路」的死角。
             BottomNavBar(
                 selected = selectedTab,
-                onSelect = { selectedIndex = it.ordinal },
+                onSelect = {
+                    // 切 Tab 时关闭设置子页，符合对底部导航的预期
+                    showSettings = false
+                    selectedIndex = it.ordinal
+                },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }

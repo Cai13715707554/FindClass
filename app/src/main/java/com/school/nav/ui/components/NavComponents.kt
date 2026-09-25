@@ -352,4 +352,34 @@ object TestTags {
     const val SensorBuilding = "sensor_building"
     const val SensorFloor = "sensor_floor"
     const val SensorElement = "sensor_element"
+
+    // ---- 我的 · 设置 ----
+    const val SettingsEntry = "settings_entry"
+    const val SettingsScreen = "settings_screen"
+    const val SettingsBack = "settings_back"
+    const val SettingsKeyField = "settings_key_field"
+    const val SettingsSaveKey = "settings_save_key"
+    const val SettingsClearKey = "settings_clear_key"
+    const val SettingsKeyState = "settings_key_state"
+
+    // ---- 地图编辑器 ----
+    const val EditorScreen = "editor_screen"
+    const val EditorMap = "editor_map"
+    const val EditorNoKey = "editor_no_key"
+    const val EditorGoSettings = "editor_go_settings"
+    const val EditorDraftCard = "editor_draft_card"
+    const val EditorDraftHint = "editor_draft_hint"
+    const val EditorNameField = "editor_name_field"
+    const val EditorUndo = "editor_undo"
+    const val EditorCancelDraft = "editor_cancel_draft"
+    const val EditorFinish = "editor_finish"
+    const val EditorOutlineList = "editor_outline_list"
+    const val EditorSaveCard = "editor_save_card"
+    const val EditorSave = "editor_save"
+    const val EditorReload = "editor_reload"
+    const val EditorSavePath = "editor_save_path"
+
+    /** 每行的删除按钮用 `${EditorDelete}_${id}` 拼。 */
+    const val EditorDelete = "editor_delete"
+    const val EditorDeleteConfirm = "editor_delete_confirm"
 }

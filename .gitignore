@@ -39,3 +39,5 @@ release/
 # 提交信息临时文件（git commit -F 用，别提交）
 cm.txt
 commitmsg.txt
+msg*.txt
+m*.txt
