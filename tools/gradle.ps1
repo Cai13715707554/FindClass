@@ -34,13 +34,23 @@ if ($env:ANDROID_HOME) { $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME }
 
 if (-not $Tasks -or $Tasks.Count -eq 0) { $Tasks = @('assembleDebug') }
 
-# Prefer the project wrapper; fall back to a cached distribution.
+# Prefer an already-downloaded 8.13 distribution; only fall back to the wrapper.
+#
+# Note: on this machine the sandbox forbids writes to %USERPROFILE%\.gradle, so
+# GRADLE_USER_HOME points inside the repo and the wrapper would have to download a
+# fresh copy of Gradle. The cached distribution under %USERPROFILE%\.gradle is
+# readable, so use it directly when present.
 $userGradle = Join-Path $env:USERPROFILE '.gradle\wrapper\dists'
-$candidates = @((Join-Path $repoRoot 'gradlew.bat'))
+$candidates = @()
 if (Test-Path $userGradle) {
+    # Layout is <dist>/<hash>/gradle-8.13/bin/gradle.bat, so search two levels deep.
     $candidates += Get-ChildItem $userGradle -Directory -ErrorAction SilentlyContinue |
-        ForEach-Object { Join-Path $_.FullName 'gradle-8.13\bin\gradle.bat' }
+        ForEach-Object {
+            Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object { Join-Path $_.FullName 'gradle-8.13\bin\gradle.bat' }
+        }
 }
+$candidates += @((Join-Path $repoRoot 'gradlew.bat'))
 
 $gradle = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $gradle) { throw 'Gradle launcher not found. Run "gradle wrapper" first or install Gradle 8.13.' }
