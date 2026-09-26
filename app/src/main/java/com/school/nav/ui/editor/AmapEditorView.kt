@@ -16,6 +16,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.amap.api.maps.AMap
 import com.amap.api.maps.CameraUpdateFactory
 import com.amap.api.maps.MapView
+import com.amap.api.maps.model.Circle
+import com.amap.api.maps.model.CircleOptions
 import com.amap.api.maps.model.LatLng
 import com.amap.api.maps.model.Marker
 import com.amap.api.maps.model.MarkerOptions
@@ -29,6 +31,7 @@ import com.school.nav.core.model.ElementType
 import com.school.nav.core.model.Geo
 import com.school.nav.core.model.LngLat
 import com.school.nav.state.CenterRequest
+import com.school.nav.state.SelectedShape
 
 /** 经纬度 -> 高德坐标。注意高德 LatLng 的参数顺序是 (纬度, 经度)。 */
 private fun LngLat.toLatLng(): LatLng = LatLng(lat, lng)
@@ -75,6 +78,8 @@ fun AmapEditorView(
     onDragEnd: (LngLat) -> Unit,
     onCenterConsumed: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    /** 编辑模式下选中的图形：会把它的顶点画成可拖的手柄。 */
+    selection: SelectedShape? = null,
     /**
      * 是否处于拖拽绘制模式（教室 / 办公室 / 教学楼）。
      *
@@ -158,7 +163,7 @@ fun AmapEditorView(
                 aMap.uiSettings.isScrollGesturesEnabled = false
             }
 
-            redraw(aMap, overlayState, draftPoints, buildings)
+            redraw(aMap, overlayState, draftPoints, buildings, selection)
         },
     )
 }
@@ -258,12 +263,14 @@ private fun redraw(
     state: OverlayState,
     draftPoints: List<LngLat>,
     buildings: List<EditorBuilding>,
+    selection: SelectedShape?,
 ) {
     state.overlays.forEach { overlay ->
         when (overlay) {
             is Polygon -> overlay.remove()
             is Marker -> overlay.remove()
             is Polyline -> overlay.remove()
+            is Circle -> overlay.remove()
         }
     }
     state.overlays.clear()
@@ -288,21 +295,43 @@ private fun redraw(
         // 2) 楼层元素：按类型配色
         building.floors.forEach { floor ->
             floor.elements.forEach { element ->
-                val points = element.points.map { it.toLatLng() }
-                if (points.size < 3) return@forEach
                 val color = Color.parseColor(strokeColorOf(element.elementType))
-                state.overlays += aMap.addPolygon(
-                    PolygonOptions()
-                        .addAll(points)
-                        .strokeWidth(5f)
-                        .strokeColor(color)
-                        .fillColor((color and 0x00FFFFFF) or 0x33000000),
-                )
-                state.overlays += aMap.addMarker(
-                    MarkerOptions()
-                        .position(Geo.centroid(element.points).toLatLng())
-                        .title("${floor.level}F ${element.name}"),
-                )
+                val title = "${floor.level}F ${element.name}"
+
+                if (element.points.size == 1) {
+                    // 单点元素（楼梯口 / 卫生间）：**必须用圆点画**。
+                    //
+                    // 之前按多边形处理，一个点的多边形在 GL 里几乎什么都画不出来 ——
+                    // 用户添加完完全看不到东西，不知道该放哪了，这正是要修的问题。
+                    // 这里画一个带白边的实心圆，在卫星图上也够显眼。
+                    val center = element.points.first().toLatLng()
+                    state.overlays += aMap.addCircle(
+                        CircleOptions()
+                            .center(center)
+                            .radius(POINT_ELEMENT_RADIUS_M)
+                            .fillColor(color)
+                            .strokeColor(Color.WHITE)
+                            .strokeWidth(3f),
+                    )
+                    state.overlays += aMap.addMarker(
+                        MarkerOptions().position(center).title(title),
+                    )
+                } else {
+                    val points = element.points.map { it.toLatLng() }
+                    if (points.size < 3) return@forEach
+                    state.overlays += aMap.addPolygon(
+                        PolygonOptions()
+                            .addAll(points)
+                            .strokeWidth(5f)
+                            .strokeColor(color)
+                            .fillColor((color and 0x00FFFFFF) or 0x33000000),
+                    )
+                    state.overlays += aMap.addMarker(
+                        MarkerOptions()
+                            .position(Geo.centroid(element.points).toLatLng())
+                            .title(title),
+                    )
+                }
             }
         }
     }
@@ -310,22 +339,78 @@ private fun redraw(
     // 3) 正在画的：蓝色折线 + 顶点标记，满 3 点补一个填充面
     if (draftPoints.isNotEmpty()) {
         val points = draftPoints.map { it.toLatLng() }
-        state.overlays += aMap.addPolyline(
-            PolylineOptions().addAll(points).width(8f).color(Color.parseColor("#2F6BFF")),
-        )
-        if (points.size >= 3) {
-            state.overlays += aMap.addPolygon(
-                PolygonOptions()
-                    .addAll(points)
-                    .strokeWidth(4f)
-                    .strokeColor(Color.parseColor("#2F6BFF"))
-                    .fillColor(Color.parseColor("#332F6BFF")),
+        if (points.size == 1) {
+            // 单点预览也要看得见，否则点下去像是没反应
+            state.overlays += aMap.addCircle(
+                CircleOptions()
+                    .center(points.first())
+                    .radius(POINT_ELEMENT_RADIUS_M)
+                    .fillColor(Color.parseColor("#2F6BFF"))
+                    .strokeColor(Color.WHITE)
+                    .strokeWidth(3f),
             )
+        } else {
+            state.overlays += aMap.addPolyline(
+                PolylineOptions().addAll(points).width(8f).color(Color.parseColor("#2F6BFF")),
+            )
+            if (points.size >= 3) {
+                state.overlays += aMap.addPolygon(
+                    PolygonOptions()
+                        .addAll(points)
+                        .strokeWidth(4f)
+                        .strokeColor(Color.parseColor("#2F6BFF"))
+                        .fillColor(Color.parseColor("#332F6BFF")),
+                )
+            }
+            // 闭合提示：把最后一个点连回起点，让「范围已经围起来」一眼可见
+            draftPoints.first().let { first ->
+                state.overlays += aMap.addPolyline(
+                    PolylineOptions()
+                        .addAll(listOf(points.last(), first.toLatLng()))
+                        .width(4f)
+                        .color(Color.parseColor("#802F6BFF")),
+                )
+            }
         }
         draftPoints.forEachIndexed { index, point ->
-            state.overlays += aMap.addMarker(
-                MarkerOptions().position(point.toLatLng()).title("顶点 ${index + 1}"),
+            state.overlays += aMap.addCircle(
+                CircleOptions()
+                    .center(point.toLatLng())
+                    .radius(VERTEX_DOT_RADIUS_M)
+                    .fillColor(Color.WHITE)
+                    .strokeColor(Color.parseColor("#2F6BFF"))
+                    .strokeWidth(4f),
             )
+            if (index == 0) {
+                state.overlays += aMap.addMarker(
+                    MarkerOptions().position(point.toLatLng()).title("起点"),
+                )
+            }
         }
     }
+
+    // 4) 编辑模式：把选中图形的每个顶点画成可拖的圆点，让「能拖哪」一目了然
+    selection?.let { shape ->
+        shape.points.forEachIndexed { index, point ->
+            state.overlays += aMap.addCircle(
+                CircleOptions()
+                    .center(point.toLatLng())
+                    .radius(VERTEX_DOT_RADIUS_M)
+                    .fillColor(Color.parseColor("#FF8A00"))
+                    .strokeColor(Color.WHITE)
+                    .strokeWidth(4f),
+            )
+        }
+        state.overlays += aMap.addMarker(
+            MarkerOptions()
+                .position(Geo.centroid(shape.points).toLatLng())
+                .title("编辑中：${shape.name}"),
+        )
+    }
 }
+
+/** 单点元素的显示半径（米）。取 6 米，在 17 级缩放下是一个清晰的小圆点。 */
+private const val POINT_ELEMENT_RADIUS_M = 6.0
+
+/** 顶点手柄的显示半径（米）。 */
+private const val VERTEX_DOT_RADIUS_M = 3.5

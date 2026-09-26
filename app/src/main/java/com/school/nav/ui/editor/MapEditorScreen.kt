@@ -33,10 +33,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -114,6 +120,12 @@ fun MapEditorScreen(
     onNameChange: (String) -> Unit,
     onFloorCountChange: (Int) -> Unit,
     onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    onToggleEditMode: () -> Unit,
+    onRotate: () -> Unit,
+    onInsertVertex: () -> Unit,
+    onDeleteVertex: () -> Unit,
+    onDeleteSelection: () -> Unit,
     onFinish: () -> Unit,
     onCancelDraft: () -> Unit,
     onRemoveBuilding: (String) -> Unit,
@@ -162,7 +174,8 @@ fun MapEditorScreen(
             onDragUpdate = onDragUpdate,
             onDragEnd = onDragEnd,
             onCenterConsumed = onCenterConsumed,
-            draggingEnabled = !state.mode.isPoint,
+            draggingEnabled = !state.mode.isPoint || state.editMode,
+            selection = if (state.editMode) state.selectedShape else null,
             active = active,
             modifier = Modifier
                 .fillMaxSize()
@@ -250,11 +263,14 @@ fun MapEditorScreen(
         }
 
         // ---- 右侧圆形工具 ----
+        //
+        // 分两组：上面是「视图/通用」，下面是「编辑选中图形」。
+        // 编辑类按钮只在编辑模式下出现，避免平时堆一屏用不到的按钮。
         Column(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .padding(end = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             RoundTool(
                 icon = Icons.Filled.LocationOn,
@@ -264,18 +280,65 @@ fun MapEditorScreen(
             )
             RoundTool(
                 icon = Icons.AutoMirrored.Filled.Undo,
-                contentDescription = "撤销最后一个点",
+                contentDescription = "撤销",
                 testTag = TestTags.EditorUndo,
-                enabled = state.draftPoints.isNotEmpty(),
+                enabled = state.canUndo,
                 onClick = onUndo,
             )
             RoundTool(
-                icon = Icons.Filled.Close,
-                contentDescription = "放弃当前绘制",
-                testTag = TestTags.EditorCancelDraft,
-                enabled = state.draftPoints.isNotEmpty(),
-                onClick = onCancelDraft,
+                icon = Icons.AutoMirrored.Filled.Redo,
+                contentDescription = "重做",
+                testTag = TestTags.EditorRedo,
+                enabled = state.canRedo,
+                onClick = onRedo,
             )
+            RoundTool(
+                icon = Icons.Filled.Edit,
+                contentDescription = if (state.editMode) "退出编辑" else "编辑已有图形",
+                testTag = TestTags.EditorEditMode,
+                onClick = onToggleEditMode,
+                highlighted = state.editMode,
+            )
+
+            if (state.editMode) {
+                RoundTool(
+                    icon = Icons.Filled.Refresh,
+                    contentDescription = "旋转 15 度",
+                    testTag = TestTags.EditorRotate,
+                    enabled = state.selectedShape != null,
+                    onClick = onRotate,
+                )
+                RoundTool(
+                    icon = Icons.Filled.Add,
+                    contentDescription = "在边上加顶点",
+                    testTag = TestTags.EditorInsertVertex,
+                    enabled = state.selectedShape != null,
+                    onClick = onInsertVertex,
+                )
+                RoundTool(
+                    icon = Icons.Filled.Remove,
+                    contentDescription = "删掉一个顶点",
+                    testTag = TestTags.EditorDeleteVertex,
+                    enabled = state.selectedShape != null,
+                    onClick = onDeleteVertex,
+                )
+                RoundTool(
+                    icon = Icons.Filled.Delete,
+                    contentDescription = "删除选中的图形",
+                    testTag = TestTags.EditorDeleteSelection,
+                    enabled = state.selectedShape != null,
+                    onClick = onDeleteSelection,
+                )
+            }
+
+            if (state.draftPoints.isNotEmpty()) {
+                RoundTool(
+                    icon = Icons.Filled.Close,
+                    contentDescription = "放弃当前绘制",
+                    testTag = TestTags.EditorCancelDraft,
+                    onClick = onCancelDraft,
+                )
+            }
         }
 
         // ---- 底部：状态 + 主操作 ----
@@ -627,12 +690,14 @@ private fun RoundTool(
     testTag: String,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    /** 选中态：用于「编辑模式」这种开关按钮。 */
+    highlighted: Boolean = false,
 ) {
     Surface(
         shape = CircleShape,
-        color = NavColors.Card,
+        color = if (highlighted) NavColors.Brand else NavColors.Card,
         shadowElevation = 4.dp,
-        modifier = Modifier.size(44.dp),
+        modifier = Modifier.size(42.dp),
     ) {
         IconButton(
             onClick = onClick,
@@ -642,8 +707,12 @@ private fun RoundTool(
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                tint = if (enabled) NavColors.TextPrimary else NavColors.TextSecondary.copy(alpha = 0.5f),
-                modifier = Modifier.size(20.dp),
+                tint = when {
+                    !enabled -> NavColors.TextSecondary.copy(alpha = 0.4f)
+                    highlighted -> Color.White
+                    else -> NavColors.TextPrimary
+                },
+                modifier = Modifier.size(19.dp),
             )
         }
     }

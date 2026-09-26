@@ -134,7 +134,13 @@ fun AppShell(
                     },
                     onNameChange = { editorViewModel.setDraftName(it) },
                     onFloorCountChange = { editorViewModel.setDraftFloorCount(it) },
-                    onUndo = { editorViewModel.cancelDraft() },
+                    onUndo = { editorViewModel.undo() },
+                    onRedo = { editorViewModel.redo() },
+                    onToggleEditMode = { editorViewModel.setEditMode(!editorState.editMode) },
+                    onRotate = { editorViewModel.rotateSelection() },
+                    onInsertVertex = { editorViewModel.insertVertexAtAnchor() },
+                    onDeleteVertex = { editorViewModel.deleteVertexAtAnchor() },
+                    onDeleteSelection = { editorViewModel.removeSelection() },
                     onFinish = { editorViewModel.finishDraft() },
                     onCancelDraft = { editorViewModel.cancelDraft() },
                     onRemoveBuilding = { editorViewModel.removeBuilding(it) },
@@ -164,6 +170,15 @@ fun AppShell(
                         onSaveWebKey = { editorViewModel.saveWebKey(it) },
                         onClearWebKey = { editorViewModel.clearWebKey() },
                         onBack = { showSettings = false },
+                        configs = editorState.configs,
+                        activeConfigName = editorState.activeConfigName,
+                        onSwitchConfig = { editorViewModel.switchConfig(it) },
+                        onCreateConfig = { editorViewModel.createConfig(it) },
+                        onDuplicateConfig = { editorViewModel.duplicateConfig(it) },
+                        onRenameConfig = { fileName, newName ->
+                            editorViewModel.renameConfig(fileName, newName)
+                        },
+                        onDeleteConfig = { editorViewModel.deleteConfig(it) },
                         contentPadding = contentPadding,
                     )
 

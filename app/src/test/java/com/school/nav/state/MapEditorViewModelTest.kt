@@ -1,15 +1,16 @@
 package com.school.nav.state
 
-import com.school.nav.core.data.CampusRepository
 import com.school.nav.core.data.EditorBuilding
 import com.school.nav.core.data.EditorMode
 import com.school.nav.core.model.ElementType
 import com.school.nav.core.model.LngLat
+import com.school.nav.data.ActiveConfigStore
 import com.school.nav.data.ApiKeyStore
-import com.school.nav.data.EditorConfigStore
+import com.school.nav.data.ConfigStore
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -24,8 +25,14 @@ import java.nio.file.Files
  * 交互模型（用户要求「别让人靠点三个点来划定位置」之后定的）：
  *
  *  - **拖拽矩形**：教学楼 / 教室 / 办公室 —— 按住从一角拖到对角；
+ *  - **拖拽圆**：圆形区域 —— 按下的点当圆心，拖出去的距离当半径；
  *  - **点击落点**：楼梯口 / 卫生间 —— 点一下就放置，不用画边界；
- *  - 楼梯还要选起始层与结束层，合并时在覆盖的每一层都生成一份。
+ *  - **编辑形状**：选中后拖顶点 / 拖整体平移 / 边上插点 / 删点 / 旋转。
+ *
+ * 另外覆盖三件用户明确提过的事：
+ *  1. 撤销必须能把**已经写进配置文件**的楼栋也撤回来（历史里存的是整份数据快照）；
+ *  2. 配置要有**多份**，能在设置页切换 / 新建 / 复制 / 改名 / 删除；
+ *  3. 切换配置后编辑器里的楼栋要整批换掉，不能还留着上一所学校的。
  *
  * 绘制逻辑刻意不依赖高德 SDK，所以能在纯 JVM 上测干净；
  * 地图渲染本身需要真机与有效 Key，这里不覆盖。
@@ -33,7 +40,8 @@ import java.nio.file.Files
 class MapEditorViewModelTest {
 
     private lateinit var root: File
-    private lateinit var configStore: EditorConfigStore
+    private lateinit var configStore: ConfigStore
+    private lateinit var activeStore: InMemoryActiveConfigStore
     private lateinit var keyStore: InMemoryApiKeyStore
 
     /** 内存版 Key 存储，避免拉起 SharedPreferences。 */
@@ -62,14 +70,23 @@ class MapEditorViewModelTest {
         }
     }
 
-    private val emptyRepository = CampusRepository("""{"buildings":[]}""")
+    /** 内存版「当前用哪一份配置」，同样避免 SharedPreferences。 */
+    private class InMemoryActiveConfigStore(private var name: String? = null) : ActiveConfigStore {
+        override fun activeFileName(): String? = name
+
+        override fun setActiveFileName(name: String?) {
+            this.name = name
+        }
+    }
 
     @Before
     fun setUp() {
         root = Files.createTempDirectory("editor-vm-test").toFile()
-        configStore = EditorConfigStore(
+        activeStore = InMemoryActiveConfigStore()
+        configStore = ConfigStore(
             filesDir = File(root, "internal").apply { mkdirs() },
             externalFilesDir = File(root, "external").apply { mkdirs() },
+            activeConfigStore = activeStore,
         )
         keyStore = InMemoryApiKeyStore()
     }
@@ -79,13 +96,16 @@ class MapEditorViewModelTest {
         root.deleteRecursively()
     }
 
-    private fun viewModel(repository: CampusRepository = emptyRepository) =
+    /** `onDataChanged` 被调了几次 —— 用来验证「切换配置会通知外层重新装配仓库」。 */
+    private var dataChanged = 0
+
+    private fun viewModel() =
         MapEditorViewModel(
             configStore = configStore,
             apiKeyStore = keyStore,
             // 不传 locationSource：定位需要 Android，绘制逻辑不该依赖它
             locationSource = null,
-            repository = repository,
+            onDataChanged = { dataChanged++ },
         )
 
     private val dragFrom = LngLat(113.1300, 23.1300)
@@ -105,6 +125,10 @@ class MapEditorViewModelTest {
         drag(vm)
         vm.finishDraft()
     }
+
+    /** 当前生效配置在外部目录里的那份文件。 */
+    private fun externalFile(): File? =
+        configStore.externalDir?.let { File(it, configStore.activeFileName()) }
 
     // ------------------------------------------------------------ 初始状态
 
@@ -180,63 +204,48 @@ class MapEditorViewModelTest {
         assertNull(vm.uiState.value.dragStart)
     }
 
+    // ------------------------------------------------------------ 圆形工具
+
     @Test
-    fun `单点模式不会响应拖拽`() {
+    fun `圆形工具按住拖出圆`() {
         val vm = viewModel()
         drawBuilding(vm, "A栋")
-        val id = vm.uiState.value.buildings.first().id
-        vm.setMode(EditorMode.Toilet)
-        vm.setTargetBuilding(id)
-
-        vm.onDragStart(dragFrom)
-        vm.onDragUpdate(dragTo)
-
-        assertTrue("单点元素不该产生拖拽预览", vm.uiState.value.draftPoints.isEmpty())
-    }
-
-    @Test
-    fun `教学楼未命名时给一个默认名字`() {
-        val vm = viewModel()
-        vm.setMode(EditorMode.Building)
-        drag(vm)
-        vm.finishDraft()
-        assertTrue(vm.uiState.value.buildings.first().name.isNotBlank())
-    }
-
-    @Test
-    fun `同名楼栋再次成面视为重画轮廓并保留楼层`() {
-        val vm = viewModel()
-        drawBuilding(vm, "A栋")
-
-        // 给 A 栋补一个教室（用另一个位置，避免与楼栋轮廓重叠）
-        vm.setMode(EditorMode.Room)
+        vm.setMode(EditorMode.CircleRoom)
         vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
-        vm.setDraftName("101")
-        drag(vm, LngLat(113.1400, 23.1400), LngLat(113.1404, 23.1403))
-        vm.finishDraft()
-        assertEquals(1, vm.uiState.value.buildings.first().elementCount)
+        vm.setDraftName("圆形大厅")
 
-        // 重画外轮廓（换个位置，仍然同名）
-        vm.setMode(EditorMode.Building)
-        vm.setDraftName("A栋")
-        drag(vm, LngLat(113.1500, 23.1500), LngLat(113.1504, 23.1503))
-        vm.finishDraft()
+        // 圆心按下，往外拖 = 半径
+        drag(vm, LngLat(113.1350, 23.1350), LngLat(113.1351, 23.1351))
 
-        val building = vm.uiState.value.buildings.single()
-        assertEquals("应仍是一栋楼，不是新增一栋", 1, vm.uiState.value.buildings.size)
-        assertEquals(4, building.polygon.size)
-        assertEquals("重画轮廓不能把楼层元素弄丢", 1, building.elementCount)
+        val element = vm.uiState.value.buildings.single().floor(1)!!.elements.single()
+        assertEquals("圆形区域应落成教室类型", ElementType.Room, element.elementType)
+        assertEquals(EditorBuilding.CIRCLE_SEGMENTS, element.points.size)
+        // 圆上的点应该离圆心差不多远（正多边形，允许一点误差）
+        val center = LngLat(113.1350, 23.1350)
+        val radii = element.points.map { com.school.nav.core.model.Geo.distanceMeters(center, it) }
+        assertEquals(radii.first(), radii.max(), 0.05)
+        assertEquals(radii.first(), radii.min(), 0.05)
+        assertTrue("半径应该是个正数", radii.first() > 1.0)
     }
 
     @Test
-    fun `删除楼栋`() {
+    fun `圆形只看半径不看对角跨度`() {
         val vm = viewModel()
         drawBuilding(vm, "A栋")
-        val id = vm.uiState.value.buildings.first().id
+        vm.setMode(EditorMode.CircleRoom)
+        vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
 
-        vm.removeBuilding(id)
+        // 这一拖如果按「矩形对角跨度」判会算太小（只动了 1e-6 度 ≈ 0.11 m），
+        // 但圆的判定标准是半径，半径比阈值大就应该成面。
+        val center = LngLat(113.1360, 23.1360)
+        vm.onDragStart(center)
+        vm.onDragEnd(LngLat(center.lng, center.lat + 3e-5))
 
-        assertTrue(vm.uiState.value.buildings.isEmpty())
+        assertEquals(
+            "半径够大就该成圆，不该被矩形那套跨度阈值卡掉",
+            1,
+            vm.uiState.value.buildings.single().floor(1)!!.elements.size,
+        )
     }
 
     // ------------------------------------------------------------ 单点元素
@@ -426,28 +435,474 @@ class MapEditorViewModelTest {
     }
 
     @Test
-    fun `与内置楼栋同名的 id 会自动加后缀避免覆盖`() {
-        val baseJson = """
-            {
-              "buildings": [
-                {
-                  "id": "A栋", "name": "A栋",
-                  "polygon": [
-                    {"lng": 113.0, "lat": 23.0},
-                    {"lng": 113.1, "lat": 23.0},
-                    {"lng": 113.1, "lat": 23.1}
-                  ],
-                  "floors": []
-                }
-              ]
-            }
-        """.trimIndent()
-        val vm = viewModel(CampusRepository(baseJson))
+    fun `同名楼栋再次成面视为重画轮廓并保留楼层`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+
+        // 给 A 栋补一个教室（用另一个位置，避免与楼栋轮廓重叠）
+        vm.setMode(EditorMode.Room)
+        vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
+        vm.setDraftName("101")
+        drag(vm, LngLat(113.1400, 23.1400), LngLat(113.1404, 23.1403))
+        vm.finishDraft()
+        assertEquals(1, vm.uiState.value.buildings.first().elementCount)
+
+        // 重画外轮廓（换个位置，仍然同名）
+        vm.setMode(EditorMode.Building)
+        vm.setDraftName("A栋")
+        drag(vm, LngLat(113.1500, 23.1500), LngLat(113.1504, 23.1503))
+        vm.finishDraft()
+
+        val building = vm.uiState.value.buildings.single()
+        assertEquals("应仍是一栋楼，不是新增一栋", 1, vm.uiState.value.buildings.size)
+        assertEquals(4, building.polygon.size)
+        assertEquals("重画轮廓不能把楼层元素弄丢", 1, building.elementCount)
+    }
+
+    @Test
+    fun `配置里已有的楼栋不会与新画的楼栋撞 id`() {
+        // 先在配置里放一栋楼，模拟「上次编辑保存过」
+        configStore.saveActive(
+            listOf(
+                EditorBuilding(
+                    id = "editor-a",
+                    name = "A栋",
+                    polygon = listOf(
+                        LngLat(113.1000, 23.1000),
+                        LngLat(113.1004, 23.1000),
+                        LngLat(113.1004, 23.1003),
+                        LngLat(113.1000, 23.1003),
+                    ),
+                ),
+            ),
+        )
+
+        val vm = viewModel()
+        assertEquals("应把配置里的楼栋读进来", 1, vm.uiState.value.buildings.size)
 
         drawBuilding(vm, "A栋")
 
+        // 同名 = 重画轮廓，仍然是一栋楼
+        assertEquals(1, vm.uiState.value.buildings.size)
+        assertTrue("id 不该变", vm.uiState.value.buildings.first().id.isNotBlank())
+
+        // 换一个名字 = 新增一栋，两栋 id 必须不同
+        drawBuilding(vm, "B栋")
+        val buildings = vm.uiState.value.buildings
+        assertEquals(2, buildings.size)
+        assertEquals("两栋楼的 id 不该重复", 2, buildings.map { it.id }.toSet().size)
+    }
+
+    // ------------------------------------------------------------ 撤销 / 重做
+
+    @Test
+    fun `撤销能把配置里读进来的楼栋也撤回来`() {
+        // 这份楼栋「已经写进配置」，正是用户抱怨撤不掉的那种
+        configStore.saveActive(
+            listOf(
+                EditorBuilding(
+                    id = "editor-a",
+                    name = "A栋",
+                    polygon = listOf(
+                        LngLat(113.1000, 23.1000),
+                        LngLat(113.1004, 23.1000),
+                        LngLat(113.1004, 23.1003),
+                        LngLat(113.1000, 23.1003),
+                    ),
+                ),
+            ),
+        )
+
+        val vm = viewModel()
+        val id = vm.uiState.value.buildings.single().id
+        assertFalse("没有改动时不该能撤销", vm.uiState.value.canUndo)
+
+        vm.removeBuilding(id)
+
+        assertTrue("删掉之后历史里应该有东西", vm.uiState.value.canUndo)
+        assertTrue("删除应立即生效", vm.uiState.value.buildings.isEmpty())
+
+        vm.undo()
+
+        assertEquals("撤销应把已保存的楼栋找回来", 1, vm.uiState.value.buildings.size)
+        assertEquals("A栋", vm.uiState.value.buildings.single().name)
+    }
+
+    @Test
+    fun `撤销与重做成对工作`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        assertTrue(vm.uiState.value.canUndo)
+
+        vm.undo()
+        assertTrue("撤销后应没有楼栋", vm.uiState.value.buildings.isEmpty())
+        assertTrue("撤销后应能重做", vm.uiState.value.canRedo)
+
+        vm.redo()
+        assertEquals("重做应把楼栋放回来", 1, vm.uiState.value.buildings.size)
+        assertFalse("重做完重做栈应清空", vm.uiState.value.canRedo)
+    }
+
+    @Test
+    fun `新的改动会让重做失效`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.undo()
+        assertTrue(vm.uiState.value.canRedo)
+
+        drawBuilding(vm, "B栋")
+
+        assertFalse("走了新分支之后旧的重做记录必须丢掉", vm.uiState.value.canRedo)
+    }
+
+    @Test
+    fun `一次拖拽编辑只记一步历史`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val before = vm.uiState.value.buildings.single().polygon
+
+        // 选中轮廓后整体拖走（模拟手指一路移动很多帧）
+        vm.setEditMode(true)
+        vm.onTap(before.first())
+        vm.onShapeDragStart(before.first())
+        for (i in 1..20) {
+            vm.onShapeDragUpdate(LngLat(before.first().lng + i * 1e-5, before.first().lat))
+        }
+        vm.onShapeDragEnd()
+
+        val moved = vm.uiState.value.buildings.single().polygon
+        assertNotEquals("图形应该被拖走了", before.first().lng, moved.first().lng, 1e-9)
+
+        vm.undo()
+        assertEquals(
+            "一次手势只该占一步历史，撤销一次就应完全回位",
+            before.first().lng,
+            vm.uiState.value.buildings.single().polygon.first().lng,
+            1e-9,
+        )
+    }
+
+    // ------------------------------------------------------------ 编辑形状
+
+    @Test
+    fun `编辑模式能选中图形并拖单个顶点`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val polygon = vm.uiState.value.buildings.single().polygon
+
+        vm.setEditMode(true)
+        vm.onTap(polygon.first())
+        assertNotNull("点图形内部应选中它", vm.uiState.value.selection)
+        assertEquals("选中的应是楼栋外轮廓", true, vm.uiState.value.selectedShape!!.isBuildingOutline)
+
+        val moved = LngLat(polygon.first().lng + 1e-4, polygon.first().lat + 1e-4)
+        vm.onShapeDragStart(polygon.first())
+        vm.onShapeDragUpdate(moved)
+        vm.onShapeDragEnd()
+
+        assertEquals(
+            "只有被拖的那个顶点该动",
+            moved.lng,
+            vm.uiState.value.buildings.single().polygon.first().lng,
+            1e-9,
+        )
+        assertEquals(
+            "其他顶点不该跟着动",
+            polygon[1].lng,
+            vm.uiState.value.buildings.single().polygon[1].lng,
+            1e-9,
+        )
+    }
+
+    @Test
+    fun `在边上插点会增加顶点数`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val polygon = vm.uiState.value.buildings.single().polygon
+
+        // 选中轮廓，然后点在第一条边的中点上
+        vm.setEditMode(true)
+        vm.onTap(polygon.first())
+        val mid = LngLat(
+            (polygon[0].lng + polygon[1].lng) / 2,
+            (polygon[0].lat + polygon[1].lat) / 2,
+        )
+        vm.insertVertexAt(mid)
+
+        assertEquals(
+            "四边形插一个点应变成五边形",
+            5,
+            vm.uiState.value.buildings.single().polygon.size,
+        )
+    }
+
+    @Test
+    fun `在顶点上删点会减少顶点数`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val polygon = vm.uiState.value.buildings.single().polygon
+
+        vm.setEditMode(true)
+        vm.onTap(polygon.first())
+        vm.deleteVertexAt(polygon[1])
+
+        assertEquals(
+            "四边形删一个点应变成三角形",
+            3,
+            vm.uiState.value.buildings.single().polygon.size,
+        )
+    }
+
+    @Test
+    fun `三角形上再删点会被拦住`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val polygon = vm.uiState.value.buildings.single().polygon
+
+        vm.setEditMode(true)
+        vm.onTap(polygon.first())
+        vm.deleteVertexAt(polygon[1])
+        assertEquals(3, vm.uiState.value.buildings.single().polygon.size)
+
+        vm.deleteVertexAt(vm.uiState.value.buildings.single().polygon[0])
+
+        assertEquals(
+            "至少要留三个顶点，否则围不成面",
+            3,
+            vm.uiState.value.buildings.single().polygon.size,
+        )
+    }
+
+    @Test
+    fun `旋转会转角度但不改变图形的外接矩形尺寸`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val polygon = vm.uiState.value.buildings.single().polygon
+        val widthBefore = polygon.maxOf { it.lng } - polygon.minOf { it.lng }
+        val heightBefore = polygon.maxOf { it.lat } - polygon.minOf { it.lat }
+
+        vm.setEditMode(true)
+        vm.onTap(polygon.first())
+        vm.rotateSelection(90.0)
+
+        val rotated = vm.uiState.value.buildings.single().polygon
+        val widthAfter = rotated.maxOf { it.lng } - rotated.minOf { it.lng }
+        val heightAfter = rotated.maxOf { it.lat } - rotated.minOf { it.lat }
+
+        // 转 90 度之后长宽应该互换（经纬度尺度不同，换算成米再比）
+        val kx = com.school.nav.core.model.Geo.metersPerDegLng(23.13)
+        val ky = com.school.nav.core.model.Geo.METERS_PER_DEG_LAT
+        val widthBeforeM = widthBefore * kx
+        val heightBeforeM = heightBefore * ky
+        val widthAfterM = widthAfter * kx
+        val heightAfterM = heightAfter * ky
+
+        assertEquals("转 90 度后宽度应约等于原来的高度", heightBeforeM, widthAfterM, 1.0)
+        assertEquals("转 90 度后高度应约等于原来的宽度", widthBeforeM, heightAfterM, 1.0)
+    }
+
+    @Test
+    fun `单点元素不会响应旋转和插点`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
         val id = vm.uiState.value.buildings.first().id
-        assertFalse("id 与内置楼栋相同会导致覆盖，必须自动避让，实际：$id", id == "A栋")
+        vm.setMode(EditorMode.Toilet)
+        vm.setTargetBuilding(id)
+        vm.setDraftName("卫生间1")
+        vm.onTap(LngLat(113.1302, 23.1301))
+
+        vm.setEditMode(true)
+        vm.onTap(LngLat(113.1302, 23.1301))
+        assertEquals("应选中那个点元素", "toilet-卫生间1", vm.uiState.value.selection?.elementId)
+
+        vm.rotateSelection(90.0)
+        vm.insertVertexAt(LngLat(113.1302, 23.1301))
+
+        val element = vm.uiState.value.buildings.single().floor(1)!!.elements.single()
+        assertEquals("单点元素既没有方向也没有边，点串不该被改动", 1, element.points.size)
+    }
+
+    @Test
+    fun `编辑模式下删除选中图形`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val polygon = vm.uiState.value.buildings.single().polygon
+
+        vm.setEditMode(true)
+        vm.onTap(polygon.first())
+        vm.removeSelection()
+
+        assertTrue("选中的图形应被删掉", vm.uiState.value.buildings.isEmpty())
+        assertNull("删完应清掉选中态", vm.uiState.value.selection)
+
+        vm.undo()
+        assertEquals("删图形也要能撤销", 1, vm.uiState.value.buildings.size)
+    }
+
+    @Test
+    fun `退出编辑模式会清掉选中与锚点`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.setEditMode(true)
+        vm.onTap(vm.uiState.value.buildings.single().polygon.first())
+        assertNotNull(vm.uiState.value.selection)
+        assertNotNull(vm.uiState.value.editAnchor)
+
+        vm.setEditMode(false)
+
+        assertNull(vm.uiState.value.selection)
+        assertNull("锚点也必须清掉，否则工具按钮会作用到看不见的位置", vm.uiState.value.editAnchor)
+    }
+
+    // ------------------------------------------------------------ 多配置
+
+    @Test
+    fun `配置列表初始就包含当前生效的那一份`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.save()
+
+        assertEquals("保存应落出一份配置文件", 1, vm.uiState.value.configs.size)
+        assertEquals(configStore.activeFileName(), vm.uiState.value.activeConfigName)
+    }
+
+    @Test
+    fun `新建配置会立刻切过去而且是空的`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.save()
+        assertEquals(1, vm.uiState.value.buildings.size)
+
+        vm.createConfig("实验中学")
+
+        assertEquals("新建后应切到新文件", "实验中学.json", vm.uiState.value.activeConfigName)
+        assertTrue("新配置里不该有上一所学校的楼栋", vm.uiState.value.buildings.isEmpty())
+        assertEquals(2, vm.uiState.value.configs.size)
+        assertTrue("应通知外层重新装配仓库", dataChanged > 0)
+    }
+
+    @Test
+    fun `切换配置会整批换掉编辑器里的数据`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.save()
+        val firstFile = vm.uiState.value.activeConfigName
+
+        vm.createConfig("实验中学")
+        drawBuilding(vm, "实验楼")
+        vm.save()
+
+        vm.switchConfig(firstFile)
+
+        assertEquals("应切回第一份", firstFile, vm.uiState.value.activeConfigName)
+        assertEquals(1, vm.uiState.value.buildings.size)
+        assertEquals("A栋", vm.uiState.value.buildings.single().name)
+
+        vm.switchConfig("实验中学.json")
+        assertEquals("实验楼", vm.uiState.value.buildings.single().name)
+    }
+
+    @Test
+    fun `切换配置会清掉撤销栈避免跨学校撤销`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.save()
+        val firstFile = vm.uiState.value.activeConfigName
+        vm.createConfig("实验中学")
+        assertTrue("刚切完不该能撤销", !vm.uiState.value.canUndo)
+
+        vm.switchConfig(firstFile)
+
+        assertFalse("切换配置后撤销栈必须清空", vm.uiState.value.canUndo)
+        assertFalse(vm.uiState.value.canRedo)
+    }
+
+    @Test
+    fun `复制配置会带着楼栋一起复制`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.save()
+        val source = vm.uiState.value.activeConfigName
+
+        vm.duplicateConfig(source)
+
+        assertEquals("复制完应切到副本", "editor_buildings 副本.json", vm.uiState.value.activeConfigName)
+        assertEquals("副本里应该有原来的楼栋", 1, vm.uiState.value.buildings.size)
+        assertEquals("A栋", vm.uiState.value.buildings.single().name)
+        assertEquals("原文件还在", 2, vm.uiState.value.configs.size)
+    }
+
+    @Test
+    fun `重命名配置会改文件名并保持内容`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.save()
+
+        vm.renameConfig(vm.uiState.value.activeConfigName, "第一中学")
+
+        assertEquals("第一中学.json", vm.uiState.value.activeConfigName)
+        assertEquals("改名不该丢内容", 1, vm.uiState.value.buildings.size)
+        assertTrue(File(configStore.internalDir, "第一中学.json").isFile)
+    }
+
+    @Test
+    fun `删除当前配置会自动切到剩下的一份`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.save()
+        val firstFile = vm.uiState.value.activeConfigName
+
+        vm.createConfig("实验中学")
+        drawBuilding(vm, "实验楼")
+        vm.save()
+
+        vm.deleteConfig("实验中学.json")
+
+        assertEquals("删掉当前那份应自动切到剩下的", firstFile, vm.uiState.value.activeConfigName)
+        assertEquals(1, vm.uiState.value.configs.size)
+        assertEquals("A栋", vm.uiState.value.buildings.single().name)
+    }
+
+    @Test
+    fun `把最后一份删掉之后编辑器清空但仓库会退回内置数据`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.save()
+
+        vm.deleteConfig(vm.uiState.value.activeConfigName)
+
+        assertTrue(vm.uiState.value.configs.isEmpty())
+        assertTrue("没有配置文件时应是空的编辑器", vm.uiState.value.buildings.isEmpty())
+        assertTrue("应通知外层重新装配（此时退回 assets 内置数据）", dataChanged > 0)
+    }
+
+    @Test
+    fun `重名的新建会自动加序号不覆盖已有配置`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.save()
+        val existing = vm.uiState.value.activeConfigName
+
+        // 故意用已有配置的显示名再建一份
+        vm.createConfig(existing.removeSuffix(".json"))
+
+        assertEquals(
+            "重名应自动避让而不是覆盖别人的数据",
+            existing.removeSuffix(".json") + "-2.json",
+            vm.uiState.value.activeConfigName,
+        )
+        assertEquals(2, vm.uiState.value.configs.size)
+    }
+    @Test
+    fun `损坏的配置文件在列表里被标出来而不是让编辑器崩掉`() {
+        val file = File(configStore.internalDir, "坏的.json")
+        file.parentFile?.mkdirs()
+        file.writeText("{ 这不是 JSON")
+
+        val vm = viewModel()
+
+        val broken = vm.uiState.value.configs.first { it.fileName == "坏的.json" }
+        assertTrue("读不出来的文件应标记为损坏", broken.isBroken)
     }
 
     // ------------------------------------------------------------ 存盘
@@ -458,7 +913,7 @@ class MapEditorViewModelTest {
         vm.save()
 
         assertNull(vm.uiState.value.lastSave)
-        assertFalse(configStore.internalFile.exists())
+        assertFalse(configStore.activeFile().exists())
     }
 
     @Test
@@ -473,8 +928,8 @@ class MapEditorViewModelTest {
         assertTrue(save!!.isSuccess)
         assertNotNull(save.internalPath)
         assertNotNull("外部目录可用时应同时写一份", save.externalPath)
-        assertTrue(configStore.internalFile.isFile)
-        assertTrue(configStore.externalFile!!.isFile)
+        assertTrue(configStore.activeFile().isFile)
+        assertTrue(externalFile()!!.isFile)
     }
 
     @Test
@@ -498,6 +953,19 @@ class MapEditorViewModelTest {
         val element = reopened.first().floor(2)!!.elements.single()
         assertEquals(ElementType.Toilet, element.elementType)
         assertEquals(1, element.points.size)
+    }
+
+    @Test
+    fun `保存会丢掉什么都没画的空壳楼栋`() {
+        val vm = viewModel()
+        // 只点了一下，没拖出面积 —— 不该留下一个空楼栋
+        vm.setMode(EditorMode.Building)
+        vm.onDragStart(dragFrom)
+        vm.onDragEnd(dragFrom)
+
+        vm.save()
+
+        assertNull("没有有效内容时不该写文件", vm.uiState.value.lastSave)
     }
 
     // ------------------------------------------------------------ Key

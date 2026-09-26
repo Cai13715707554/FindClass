@@ -366,6 +366,18 @@ object TestTags {
     const val SettingsClearWebKey = "settings_clear_web_key"
     const val SettingsWebKeyState = "settings_web_key_state"
 
+    /** 配置管理（一个学校一份配置）。列表项用 `${SettingsConfigRow}_${fileName}` 拼。 */
+    const val SettingsConfigSection = "settings_config_section"
+    const val SettingsConfigRow = "settings_config_row"
+    const val SettingsConfigActiveName = "settings_config_active_name"
+    const val SettingsConfigNew = "settings_config_new"
+    const val SettingsConfigDuplicate = "settings_config_duplicate"
+    const val SettingsConfigRename = "settings_config_rename"
+    const val SettingsConfigDelete = "settings_config_delete"
+    const val SettingsConfigNameField = "settings_config_name_field"
+    const val SettingsConfigNameConfirm = "settings_config_name_confirm"
+    const val SettingsConfigDeleteConfirm = "settings_config_delete_confirm"
+
     // ---- 地图编辑器 ----
     const val EditorScreen = "editor_screen"
     const val EditorMap = "editor_map"
@@ -392,6 +404,22 @@ object TestTags {
     const val EditorDraftHint = "editor_draft_hint"
     const val EditorNameField = "editor_name_field"
     const val EditorUndo = "editor_undo"
+
+    /** 撤销 / 重做。 */
+    const val EditorRedo = "editor_redo"
+
+    /** 「编辑形状」模式开关：打开后可以拖顶点、插点、旋转。 */
+    const val EditorEditMode = "editor_edit_mode"
+
+    /** 旋转选中图形（每次 15 度）。 */
+    const val EditorRotate = "editor_rotate"
+
+    /** 在最近点击处插入顶点 / 删除顶点。 */
+    const val EditorInsertVertex = "editor_insert_vertex"
+    const val EditorDeleteVertex = "editor_delete_vertex"
+
+    /** 删除整个选中的图形。 */
+    const val EditorDeleteSelection = "editor_delete_selection"
     const val EditorCancelDraft = "editor_cancel_draft"
     const val EditorFinish = "editor_finish"
     const val EditorFinishConfirm = "editor_finish_confirm"

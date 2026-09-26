@@ -52,14 +52,30 @@ import kotlinx.coroutines.launch
  * “用户改完位置后，导航立即重算”的实现方式。
  */
 class NavViewModel(
-    private val repository: CampusRepository,
+    initialRepository: CampusRepository,
     private val locationSource: LocationSource,
     private val altimeter: PressureSource,
     private val preferences: ManualPositionStore,
     private val engine: NavigationEngine = NavigationEngine(),
     private val buildingLocator: BuildingLocator = BuildingLocator(),
     private val floorEstimator: FloorEstimator = FloorEstimator(),
+    /**
+     * 仓库的更新流。
+     *
+     * 用户在设置页切换了配置文件之后，整个校园数据都换了 —— 首页必须跟着变，
+     * 否则会出现「地图上是 A 学校、首页还在讲 B 学校」这种自相矛盾的状态。
+     *
+     * 默认 null 时退回一个只含 [initialRepository] 的常量流，这样单测可以直接传
+     * 一个仓库对象，不必额外包一层 StateFlow。
+     */
+    repositoryUpdates: StateFlow<CampusRepository>? = null,
 ) : ViewModel() {
+
+    /** 当前仓库。做成派生值，切换配置后所有读取都会拿到新数据。 */
+    private val repositoryFlow: StateFlow<CampusRepository> =
+        repositoryUpdates ?: MutableStateFlow(initialRepository)
+
+    private val repository: CampusRepository get() = repositoryFlow.value
 
     // ---- 自动定位结果 ----
     private val autoBuilding = MutableStateFlow<Building?>(null)
@@ -216,7 +232,9 @@ class NavViewModel(
         sensorReadings,
         manual,
         target,
-    ) { auto, sensors, manualValue, targetValue ->
+        // 第 5 路：配置切换后重算 —— combine 最多 5 路，正好用满
+        repositoryFlow,
+    ) { auto, sensors, manualValue, targetValue, _ ->
         resolve(
             auto = auto,
             sensors = sensors,
@@ -582,10 +600,12 @@ class NavViewModel(
                         "未知的 ViewModel：${modelClass.name}"
                     }
                     return NavViewModel(
-                        repository = container.repository,
+                        initialRepository = container.repository,
                         locationSource = container.locationSource,
                         altimeter = container.altimeter,
                         preferences = container.preferences,
+                        // 切换配置文件后首页要跟着换数据
+                        repositoryUpdates = container.repositoryFlow,
                     ) as T
                 }
             }

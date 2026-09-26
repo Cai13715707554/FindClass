@@ -5,6 +5,7 @@ import com.school.nav.core.model.CampusData
 import com.school.nav.core.model.Element
 import com.school.nav.core.model.ElementType
 import com.school.nav.core.model.Floor
+import com.school.nav.core.model.Geo
 import com.school.nav.core.model.LngLat
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -14,19 +15,23 @@ import kotlinx.serialization.json.Json
  * 元素在编辑器里的画法。
  *
  * 用户的诉求是「别让人靠点三个点来划定位置」—— 逐点点选又慢又难对齐，
- * PS 那种拖拽才顺手：
+ * PS 那种拖拽才顺手。于是按形状分工具：
  *
- *  - [Rectangle]：**按住拖出一个矩形**（教学楼外轮廓 / 教室 / 办公室）。
- *    矩形是最常见的房间形状，拖一下就有四条边，不需要逐点点选。
+ *  - [Rectangle]：**按住拖出矩形**（教学楼外轮廓 / 教室 / 办公室）。
+ *    矩形是最常见的房间形状，拖一下就有四条边。
+ *  - [Circle]：**从圆心拖出半径**（圆形报告厅 / 阶梯教室 / 圆形广场）。
+ *    存成多边形（[circleFromCenter] 用 32 边形近似），
+ *    这样导航算法只认识点串、不需要为「圆」单独开一条分支。
  *  - [Point]：**点一下就是一个点**（楼梯口 / 卫生间）。
- *    这两类东西本来就没有明确边界，画矩形纯属白费功夫，
- *    而导航只需要知道它「在哪」。楼梯还额外带一个「结束楼层」表示跨几层。
+ *    这两类东西本来就没有明确边界，画形状纯属白费功夫，
+ *    导航只需要知道它「在哪」。
  *
- * 存进数据时**统一还是点串**（[EditorElement.points]）：矩形是四个角、点是一个点。
- * 这样导航算法（质心、左右判定、走廊排序）完全不需要为形态分叉。
+ * 存进数据时**统一还是点串**（[EditorElement.points]）：矩形四个角、圆是多边形、
+ * 点是一个点。导航算法（质心、左右判定、走廊排序）因此完全不需要为形状分叉。
  */
 enum class ElementShape {
     Rectangle,
+    Circle,
     Point,
 }
 
@@ -42,12 +47,13 @@ enum class EditorMode(
     val elementType: ElementType?,
     /** 是否需要先选定一栋楼（楼层内元素都属于某栋楼）。 */
     val needsBuilding: Boolean = true,
-    /** 画法：拖拽矩形还是单点。 */
+    /** 画法。 */
     val shape: ElementShape = ElementShape.Rectangle,
 ) {
     Building("教学楼", elementType = null, needsBuilding = false, shape = ElementShape.Rectangle),
     Room("教室", ElementType.Room),
     Office("办公室", ElementType.Office),
+    CircleRoom("圆形区域", ElementType.Room, shape = ElementShape.Circle),
     Stair("楼梯口", ElementType.Stair, shape = ElementShape.Point),
     Toilet("卫生间", ElementType.Toilet, shape = ElementShape.Point),
     ;
@@ -57,7 +63,8 @@ enum class EditorMode(
 
     companion object {
         /** 下拉菜单里的顺序，最常用的放前面。 */
-        val menuOrder: List<EditorMode> = listOf(Building, Room, Office, Stair, Toilet)
+        val menuOrder: List<EditorMode> =
+            listOf(Building, Room, Office, CircleRoom, Stair, Toilet)
     }
 }
 
@@ -277,6 +284,172 @@ data class EditorBuilding(
                 LngLat(westLng, northLat),
             )
         }
+
+        /**
+         * 由圆心与边界点生成一个近似圆（多边形）。
+         *
+         * 拖拽绘制用：按下点是圆心，拖到哪半径就是多少。
+         *
+         * 为什么不存成「圆心 + 半径」而是多边形：室内导航只需要知道
+         * 「这层楼里有个这样的区域」，而算法（质心、走廊排序、左右判定）
+         * 全部建立在**点串**上。存成多边形就不用为「圆」单独开一条分支。
+         * [CIRCLE_SEGMENTS] 取 32，视觉上足够圆、又不会让点串太长。
+         */
+        fun circleFromCenter(
+            center: LngLat,
+            edge: LngLat,
+            segments: Int = CIRCLE_SEGMENTS,
+        ): List<LngLat> {
+            // 先算局部米坐标下的半径，保证在地图上是个正圆：
+            // 直接对经纬度取差值会因为「一度经度 ≠ 一度纬度」而变成椭圆
+            val kx = Geo.metersPerDegLng(center.lat)
+            val ky = Geo.METERS_PER_DEG_LAT
+            val rx = (edge.lng - center.lng) * kx
+            val ry = (edge.lat - center.lat) * ky
+            val radius = kotlin.math.sqrt(rx * rx + ry * ry)
+            if (radius < 1e-6) return listOf(center)
+
+            val safeSegments = segments.coerceIn(MIN_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS)
+            return (0 until safeSegments).map { i ->
+                val angle = 2.0 * Math.PI * i / safeSegments
+                LngLat(
+                    lng = center.lng + (radius * kotlin.math.cos(angle)) / kx,
+                    lat = center.lat + (radius * kotlin.math.sin(angle)) / ky,
+                )
+            }
+        }
+
+        /**
+         * 把一个点串绕过自身质心旋转 [degrees] 度（顺时针为正）。
+         *
+         * 在**局部米坐标**里算再换算回去：直接对着经纬度做旋转会得到歪掉的形状，
+         * 因为一度经度和一度纬度对应的米数不同（在纬度 23° 处差约 8%）。
+         */
+        fun rotate(points: List<LngLat>, degrees: Double): List<LngLat> {
+            if (points.size < 2 || degrees == 0.0) return points
+            val center = Geo.centroid(points)
+            val kx = Geo.metersPerDegLng(center.lat)
+            val ky = Geo.METERS_PER_DEG_LAT
+            val rad = Math.toRadians(degrees)
+            val cos = kotlin.math.cos(rad)
+            val sin = kotlin.math.sin(rad)
+
+            return points.map { p ->
+                val x = (p.lng - center.lng) * kx
+                val y = (p.lat - center.lat) * ky
+                LngLat(
+                    lng = center.lng + (x * cos - y * sin) / kx,
+                    lat = center.lat + (x * sin + y * cos) / ky,
+                )
+            }
+        }
+
+        /**
+         * 整体平移一个点串。
+         *
+         * 用于「拖拽移动整个图形」：按局部米坐标偏移，保证经纬度换算正确。
+         */
+        fun translate(points: List<LngLat>, deltaEastM: Double, deltaNorthM: Double): List<LngLat> {
+            if (points.isEmpty()) return points
+            val refLat = points.first().lat
+            val kx = Geo.metersPerDegLng(refLat)
+            val ky = Geo.METERS_PER_DEG_LAT
+            return points.map { p ->
+                LngLat(
+                    lng = p.lng + deltaEastM / kx,
+                    lat = p.lat + deltaNorthM / ky,
+                )
+            }
+        }
+
+        /**
+         * 往点串里插入一个顶点，返回新的点串。
+         *
+         * @param insertAfterIndex 插在这个下标之后（会自动绕回，方便闭合多边形）
+         */
+        fun insertVertex(
+            points: List<LngLat>,
+            insertAfterIndex: Int,
+            vertex: LngLat,
+        ): List<LngLat> {
+            if (points.isEmpty()) return listOf(vertex)
+            val index = insertAfterIndex.coerceIn(0, points.size - 1)
+            return points.subList(0, index + 1) + vertex + points.subList(index + 1, points.size)
+        }
+
+        /**
+         * 找离 [point] 最近的那个顶点下标。
+         *
+         * 用于「拖拽顶点」与「在边上插点」：用户手指点在哪、就近命中哪个顶点。
+         * 超过 [maxDistanceM] 认为没命中，返回 null —— 否则会在离手指很远的地方
+         * 莫名其妙插入一个点。
+         */
+        fun nearestVertexIndex(
+            points: List<LngLat>,
+            point: LngLat,
+            maxDistanceM: Double,
+        ): Int? {
+            if (points.isEmpty()) return null
+            var bestIndex = -1
+            var bestDistance = Double.MAX_VALUE
+            points.forEachIndexed { index, p ->
+                val d = Geo.distanceMeters(p, point)
+                if (d < bestDistance) {
+                    bestDistance = d
+                    bestIndex = index
+                }
+            }
+            return if (bestIndex >= 0 && bestDistance <= maxDistanceM) bestIndex else null
+        }
+
+        /**
+         * 找离 [point] 最近的那条边的起点下标（边是 i -> i+1，最后一条绕回 0）。
+         *
+         * 用于「在边上插入顶点」：返回起点下标，配合 [insertVertex] 用。
+         */
+        fun nearestEdgeStartIndex(
+            points: List<LngLat>,
+            point: LngLat,
+            maxDistanceM: Double,
+        ): Int? {
+            if (points.size < 2) return null
+            var bestIndex = -1
+            var bestDistance = Double.MAX_VALUE
+            for (i in points.indices) {
+                val a = points[i]
+                val b = points[(i + 1) % points.size]
+                val d = distanceToSegmentMeters(point, a, b)
+                if (d < bestDistance) {
+                    bestDistance = d
+                    bestIndex = i
+                }
+            }
+            return if (bestIndex >= 0 && bestDistance <= maxDistanceM) bestIndex else null
+        }
+
+        /** 点到线段的距离（米）。用局部米坐标做投影，避免经纬度不等距带来的误差。 */
+        private fun distanceToSegmentMeters(p: LngLat, a: LngLat, b: LngLat): Double {
+            val kx = Geo.metersPerDegLng(p.lat)
+            val ky = Geo.METERS_PER_DEG_LAT
+            val px = (p.lng - a.lng) * kx
+            val py = (p.lat - a.lat) * ky
+            val bx = (b.lng - a.lng) * kx
+            val by = (b.lat - a.lat) * ky
+            val lenSq = bx * bx + by * by
+            if (lenSq < 1e-9) return kotlin.math.sqrt(px * px + py * py)
+            val t = ((px * bx + py * by) / lenSq).coerceIn(0.0, 1.0)
+            val dx = px - t * bx
+            val dy = py - t * by
+            return kotlin.math.sqrt(dx * dx + dy * dy)
+        }
+
+        /** 圆近似用的默认边数。 */
+        const val CIRCLE_SEGMENTS = 32
+        const val MIN_CIRCLE_SEGMENTS = 8
+        const val MAX_CIRCLE_SEGMENTS = 72
+
+        /** 拖拽起点与终点的最小间距（度），约 1 米。 */
+        const val MIN_DRAG_SPAN_DEGREES = 1e-5
 
         /**
          * 编辑器新增楼层时假定的层高（米）。

@@ -1,5 +1,6 @@
 package com.school.nav.ui.settings
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -11,11 +12,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,11 +32,15 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.school.nav.data.ConfigEntry
 import com.school.nav.ui.components.NavBarSpace
 import com.school.nav.ui.components.NavCard
 import com.school.nav.ui.components.SectionLabel
 import com.school.nav.ui.components.TestTags
 import com.school.nav.ui.theme.NavColors
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 设置页（从「我的」进入）。
@@ -56,6 +63,13 @@ fun SettingsScreen(
     onSaveWebKey: (String) -> Unit,
     onClearWebKey: () -> Unit,
     onBack: () -> Unit,
+    configs: List<ConfigEntry> = emptyList(),
+    activeConfigName: String = "",
+    onSwitchConfig: (String) -> Unit = {},
+    onCreateConfig: (String) -> Unit = {},
+    onDuplicateConfig: (String) -> Unit = {},
+    onRenameConfig: (String, String) -> Unit = { _, _ -> },
+    onDeleteConfig: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(
         start = 12.dp,
@@ -68,6 +82,11 @@ fun SettingsScreen(
     var input by rememberSaveable(currentKey) { mutableStateOf(currentKey) }
     var webInput by rememberSaveable(currentWebKey) { mutableStateOf(currentWebKey) }
     var visible by rememberSaveable { mutableStateOf(false) }
+
+    /** 正在改名 / 新建的那一份配置；null 表示弹窗关着。 */
+    var nameDialogTarget by remember { mutableStateOf<ConfigNameDialog?>(null) }
+    /** 待删除确认的那一份。 */
+    var deleteTarget by remember { mutableStateOf<ConfigEntry?>(null) }
 
     Column(
         modifier = modifier
@@ -91,6 +110,17 @@ fun SettingsScreen(
                 modifier = Modifier.testTag(TestTags.SettingsBack),
             ) { Text("返回") }
         }
+
+        // ---- 配置管理（一个学校一份）----
+        ConfigCard(
+            configs = configs,
+            activeConfigName = activeConfigName,
+            onSwitch = onSwitchConfig,
+            onNew = { nameDialogTarget = ConfigNameDialog.Create },
+            onDuplicate = onDuplicateConfig,
+            onRename = { entry -> nameDialogTarget = ConfigNameDialog.Rename(entry) },
+            onDelete = { entry -> deleteTarget = entry },
+        )
 
         // ---- 地图 Key（Android 平台）----
         KeyCard(
@@ -173,7 +203,276 @@ fun SettingsScreen(
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
+
+        NavCard {
+            SectionLabel(text = "配置文件存在哪")
+            Text(
+                text = "每个学校一份配置文件，保存在应用私有目录：\n" +
+                    "  /data/data/包名/files/config/名称.json\n\n" +
+                    "同时会在外部目录镜像一份，方便用数据线或文件管理器取走：\n" +
+                    "  /sdcard/Android/data/包名/files/config/名称.json\n\n" +
+                    "把别人的配置文件拷进外部目录再点上面的「切换」，就能换成他们学校的数据。",
+                fontSize = 13.sp,
+                color = NavColors.TextSecondary,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
     }
+
+    // ---- 新建 / 重命名弹窗 ----
+    nameDialogTarget?.let { target ->
+        ConfigNameDialogHost(
+            target = target,
+            onDismiss = { nameDialogTarget = null },
+            onConfirm = { name ->
+                when (target) {
+                    is ConfigNameDialog.Create -> onCreateConfig(name)
+                    is ConfigNameDialog.Rename -> onRenameConfig(target.entry.fileName, name)
+                }
+                nameDialogTarget = null
+            },
+        )
+    }
+
+    // ---- 删除确认弹窗 ----
+    deleteTarget?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("删除配置") },
+            text = {
+                Text(
+                    "确定删除「${entry.displayName}」吗？该文件会从应用私有目录和外部目录一起删掉，" +
+                        "删了没法恢复。",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteConfig(entry.fileName)
+                        deleteTarget = null
+                    },
+                    modifier = Modifier.testTag(TestTags.SettingsConfigDeleteConfirm),
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) { Text("取消") }
+            },
+        )
+    }
+}
+
+/** 新建 / 重命名共用的弹窗状态。 */
+private sealed interface ConfigNameDialog {
+    data object Create : ConfigNameDialog
+    data class Rename(val entry: ConfigEntry) : ConfigNameDialog
+}
+
+/**
+ * 配置管理卡片。
+ *
+ * 一行一份配置，点整行即切换；右侧三个小按钮分别是复制 / 改名 / 删除。
+ * 当前生效的那份用主色边框 + 「使用中」标记，避免删错。
+ */
+@Composable
+private fun ConfigCard(
+    configs: List<ConfigEntry>,
+    activeConfigName: String,
+    onSwitch: (String) -> Unit,
+    onNew: () -> Unit,
+    onDuplicate: (String) -> Unit,
+    onRename: (ConfigEntry) -> Unit,
+    onDelete: (ConfigEntry) -> Unit,
+) {
+    NavCard(modifier = Modifier.testTag(TestTags.SettingsConfigSection)) {
+        SectionLabel(text = "配置（一个学校一份）")
+        Text(
+            text = "这份软件不针对某一个学校：换学校就是换一份配置。" +
+                "当前正在用：「${activeConfigName.removeSuffix(".json").ifBlank { "无" }}」",
+            fontSize = 12.sp,
+            color = NavColors.TextSecondary,
+            modifier = Modifier
+                .padding(top = 6.dp)
+                .testTag(TestTags.SettingsConfigActiveName),
+        )
+
+        if (configs.isEmpty()) {
+            Text(
+                text = "还没有任何配置文件。点下面的「新建」开始画第一个学校；" +
+                    "什么都不建也可以，应用会用内置的示例数据。",
+                fontSize = 13.sp,
+                color = NavColors.TextSecondary,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                configs.forEach { entry ->
+                    ConfigRow(
+                        entry = entry,
+                        onSwitch = { onSwitch(entry.fileName) },
+                        onDuplicate = { onDuplicate(entry.fileName) },
+                        onRename = { onRename(entry) },
+                        onDelete = { onDelete(entry) },
+                    )
+                }
+            }
+        }
+
+        Button(
+            onClick = onNew,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp)
+                .testTag(TestTags.SettingsConfigNew),
+        ) { Text("新建配置") }
+    }
+}
+
+/** 配置列表里的一行。 */
+@Composable
+private fun ConfigRow(
+    entry: ConfigEntry,
+    onSwitch: () -> Unit,
+    onDuplicate: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val border = if (entry.isActive) NavColors.Brand else NavColors.Divider
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, border, MaterialTheme.shapes.small)
+            .clickableText(onSwitch)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("${TestTags.SettingsConfigRow}_${entry.fileName}"),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = entry.displayName,
+                fontSize = 15.sp,
+                color = NavColors.TextPrimary,
+            )
+            if (entry.isActive) {
+                Text(text = "使用中", fontSize = 12.sp, color = NavColors.Brand)
+            }
+        }
+
+        Text(
+            text = buildString {
+                append(
+                    when {
+                        entry.isBroken -> "文件读不出来（可能不是配置文件的 JSON）"
+                        else -> "${entry.buildingCount} 栋楼"
+                    },
+                )
+                append(" · ")
+                append(formatTime(entry.lastModified))
+            },
+            fontSize = 12.sp,
+            color = NavColors.TextSecondary,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SmallConfigButton(
+                text = "复制",
+                testTag = "${TestTags.SettingsConfigDuplicate}_${entry.fileName}",
+                onClick = onDuplicate,
+            )
+            SmallConfigButton(
+                text = "改名",
+                testTag = "${TestTags.SettingsConfigRename}_${entry.fileName}",
+                onClick = onRename,
+            )
+            SmallConfigButton(
+                text = "删除",
+                testTag = "${TestTags.SettingsConfigDelete}_${entry.fileName}",
+                onClick = onDelete,
+            )
+        }
+    }
+}
+
+/** 行内小按钮：用描边按钮，比 TextButton 更好点。 */
+@Composable
+private fun SmallConfigButton(text: String, testTag: String, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.testTag(testTag),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Text(text = text, fontSize = 13.sp)
+    }
+}
+
+/** 新建 / 重命名的输入弹窗。 */
+@Composable
+private fun ConfigNameDialogHost(
+    target: ConfigNameDialog,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val initial = when (target) {
+        is ConfigNameDialog.Create -> ""
+        is ConfigNameDialog.Rename -> target.entry.displayName
+    }
+    var name by remember(target) { mutableStateOf(initial) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(if (target is ConfigNameDialog.Create) "新建配置" else "重命名配置")
+        },
+        text = {
+            Column {
+                Text(
+                    text = "名字会直接当作文件名（自动加 .json）。比如填「实验中学」，" +
+                        "就生成 实验中学.json。",
+                    fontSize = 12.sp,
+                    color = NavColors.TextSecondary,
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .testTag(TestTags.SettingsConfigNameField),
+                    singleLine = true,
+                    label = { Text("配置名称") },
+                    shape = MaterialTheme.shapes.small,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name) },
+                enabled = name.isNotBlank(),
+                modifier = Modifier.testTag(TestTags.SettingsConfigNameConfirm),
+            ) { Text("确定") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+/** 毫秒时间戳 -> `2025-01-31 14:05`；只做展示，不参与逻辑。 */
+private fun formatTime(millis: Long): String {
+    val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+    return fmt.format(Date(millis))
 }
 
 /** 一个 Key 的输入卡片。地图 Key 与搜索 Key 结构相同，抽出来避免两处重复。 */

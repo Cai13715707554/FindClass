@@ -22,16 +22,19 @@ object CampusAssets {
         context.assets.open(fileName).bufferedReader().use(BufferedReader::readText)
 
     /**
-     * 装配仓库：assets + 编辑器配置。
+     * 装配仓库：assets + **当前生效的那份**编辑器配置。
+     *
+     * 注意「当前生效」是 [ConfigStore] 的职责：用户可以有多份配置（一个学校一份），
+     * 这里只读它指定的那一份。
      *
      * assets 读失败（数据文件损坏）时不抛异常，降级为空数据集 ——
      * App 仍然能启动并让用户手动/用编辑器修数据，比直接崩掉有用。
      */
-    fun loadRepository(context: Context, store: EditorConfigStore): CampusRepository {
+    fun loadRepository(context: Context, store: ConfigStore): CampusRepository {
         val assetJson = runCatching { loadJson(context) }.getOrElse { """{"buildings":[]}""" }
         return CampusRepository.create(
             assetJson = assetJson,
-            editorConfigJson = store.loadConfigJson(),
+            editorConfigJson = store.loadActiveJson(),
         ).repository
     }
 }

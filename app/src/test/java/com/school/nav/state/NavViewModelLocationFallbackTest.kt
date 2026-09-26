@@ -159,7 +159,7 @@ class NavViewModelLocationFallbackTest {
     )
 
     private fun viewModel(source: LocationSource): NavViewModel = NavViewModel(
-        repository = repository,
+        initialRepository = repository,
         locationSource = source,
         altimeter = NoBarometer(),
         preferences = InMemoryManualPositions(),
