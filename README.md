@@ -23,7 +23,7 @@
 | --- | --- |
 | Debug APK 构建 | ✅ 成功（`app/build/outputs/apk/debug/`，按 ABI 拆分 + universal） |
 | `:core` 单元测试 | ✅ **80 个用例全绿**（7 个测试类；1 个 skip 是平台相关的有序性检查） |
-| `:app` 单元测试 | ✅ **105 个用例全绿**（4 个测试类：编辑器状态机 / 多配置存储 / Key / 定位兜底） |
+| `:app` 单元测试 | ✅ **107 个用例全绿**（4 个测试类：编辑器状态机 / 多配置存储 / Key / 定位兜底） |
 | 地图编辑器（绘制 + 编辑形状 + 钢笔 + 多配置） | ✅ 已实现，⚠️ **未在真机验证地图渲染**（需要你自己的高德 Key） |
 | 真机验证（GPS / 气压计 / 权限） | ❌ 未做（本机无设备，见 7.2） |
 
@@ -159,7 +159,7 @@ powershell -File tools/gradle.ps1 assembleDebug
 # 跑纯算法单元测试（:core，80 个用例，不需要设备）
 powershell -File tools/gradle.ps1 :core:test
 
-# 跑编辑器状态机 / 配置存储 / Key / 定位兜底（:app，105 个用例）
+# 跑编辑器状态机 / 配置存储 / Key / 定位兜底（:app，107 个用例）
 powershell -File tools/gradle.ps1 :app:testDebugUnitTest
 
 # 交付前全量：core 单测 + app 单测 + 构建 APK
@@ -659,4 +659,5 @@ APK 已经构建成功，只是没有设备可以安装。本机实测：
 | `docs/技术方案.txt` | 原始技术方案 |
 | `docs/Demo.html` | 原始交互 Demo |
 | `docs/技术方案落地说明.md` | **本工程**：技术方案 → 代码的映射、算法细节、排查记录 |
+| `docs/工作梳理/` | **本工程现状快照**：功能清单 / 技术方案 / UI 风格 / 交互逻辑，四份分开，适合改东西前先理清 |
 | `README.md` | 本文件 |
