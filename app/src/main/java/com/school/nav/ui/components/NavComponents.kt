@@ -377,9 +377,9 @@ object TestTags {
     const val EditorModeItem = "editor_mode_item"
 
     const val EditorSearchField = "editor_search_field"
-    const val EditorSearchOverlay = "editor_search_overlay"
     const val EditorSearchInput = "editor_search_input"
     const val EditorSearchClose = "editor_search_close"
+    const val EditorSearchResults = "editor_search_results"
     const val EditorSearchResultItem = "editor_search_result_item"
     const val EditorMyLocation = "editor_my_location"
 

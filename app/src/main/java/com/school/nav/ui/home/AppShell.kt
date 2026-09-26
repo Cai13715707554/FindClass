@@ -11,13 +11,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -88,53 +88,13 @@ fun AppShell(
         editorViewModel.messages.collect { snackbarHostState.showSnackbar(it) }
     }
 
-    /*
-     * 地图页用 movableContentOf 包起来，这是「切页签回来地图不刷新」的关键。
-     *
-     * 页面是 `when` 切换的，切走时整棵子树会离开组合树。而地图的 MapView 是在页面里
-     * `remember { MapView(context) }` 建的 —— 子树一销毁它就跟着销毁，再切回来会新建，
-     * 相机位置、overlay、GL 上下文全部重置，表现就是「地图刷新了」。
-     *
-     * 放进 movableContentOf 后：Map 页签激活时它挂在下面的位置，切走时只是被**移动**
-     * （移动的节点不参与组合，但实例仍然存活），所以切回来相机与 overlay 原样还在。
-     *
-     * 限制：这个槽位必须在组合的任何分支之外、且只被调用一次，否则 Compose 会报错。
-     */
-    val mapContent = movableContentOf {
-        MapEditorScreen(
-            state = editorState,
-            onMapClick = { editorViewModel.addPoint(it) },
-            onModeChange = { editorViewModel.setMode(it) },
-            onTargetBuildingChange = { editorViewModel.setTargetBuilding(it) },
-            onFloorChange = { editorViewModel.setFloorLevel(it) },
-            onEndFloorChange = { editorViewModel.setEndFloorLevel(it) },
-            onBuildingFloorCountChange = { id, count ->
-                editorViewModel.setBuildingFloorCount(id, count)
-            },
-            onNameChange = { editorViewModel.setDraftName(it) },
-            onFloorCountChange = { editorViewModel.setDraftFloorCount(it) },
-            onUndo = { editorViewModel.undoPoint() },
-            onFinish = { editorViewModel.finishDraft() },
-            onCancelDraft = { editorViewModel.cancelDraft() },
-            onRemoveBuilding = { editorViewModel.removeBuilding(it) },
-            onRemoveElement = { b, level, e -> editorViewModel.removeElement(b, level, e) },
-            onSave = { editorViewModel.save() },
-            onReload = { editorViewModel.reload() },
-            onGoMyLocation = { editorViewModel.goToMyLocation() },
-            onCenterConsumed = { editorViewModel.consumeCenterRequest(it) },
-            onGoToPoint = { editorViewModel.goTo(it) },
-            onGoSettings = { showSettings = true },
-        )
-    }
-
     Scaffold(
         containerColor = NavColors.PageBackground,
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         modifier = Modifier.testTag(TestTags.AppShell),
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize()) {
-            // key 里带上 showSettings：设置页与「我的」是两个不同的可保存状态
-            val pageKey = if (showSettings) "settings" else selectedTab.name
+            val onMapTab = !showSettings && selectedTab == NavTab.Map
 
             val contentPadding = PaddingValues(
                 start = horizontalPadding,
@@ -142,6 +102,57 @@ fun AppShell(
                 top = topPadding + innerPadding.calculateTopPadding(),
                 bottom = NavBarSpace,
             )
+
+            /*
+             * 地图**常驻组合树**，只切可见性。
+             *
+             * 这是「切页签回来地图不刷新」的关键，也是踩过两次坑之后的做法：
+             *
+             *  1. 最开始把 ViewModel 提到 Activity 作用域 —— 只解决了「状态被重建」，
+             *     MapView 还是随页面销毁；
+             *  2. 换 movableContentOf 也没成 —— AndroidView 在移动时 View 仍会被重建。
+             *
+             * 现在反过来：地图永远待在组合树里（`active=false` 时由 MapView 自己
+             * 设为 INVISIBLE 并解除点击监听），所以 MapView 对象、相机、overlay
+             * 全都不会变；切走的只是别的页面盖在它上面。
+             *
+             * 放在 Box 最底层、又始终由其它页面或导航栏覆盖，因此不需要额外处理命中测试。
+             */
+            if (editorState.hasApiKey) {
+                MapEditorScreen(
+                    state = editorState,
+                    onMapClick = { editorViewModel.onTap(it) },
+                    onDragStart = { editorViewModel.onDragStart(it) },
+                    onDragUpdate = { editorViewModel.onDragUpdate(it) },
+                    onDragEnd = { editorViewModel.onDragEnd(it) },
+                    onModeChange = { editorViewModel.setMode(it) },
+                    onTargetBuildingChange = { editorViewModel.setTargetBuilding(it) },
+                    onFloorChange = { editorViewModel.setFloorLevel(it) },
+                    onEndFloorChange = { editorViewModel.setEndFloorLevel(it) },
+                    onBuildingFloorCountChange = { id, count ->
+                        editorViewModel.setBuildingFloorCount(id, count)
+                    },
+                    onNameChange = { editorViewModel.setDraftName(it) },
+                    onFloorCountChange = { editorViewModel.setDraftFloorCount(it) },
+                    onUndo = { editorViewModel.cancelDraft() },
+                    onFinish = { editorViewModel.finishDraft() },
+                    onCancelDraft = { editorViewModel.cancelDraft() },
+                    onRemoveBuilding = { editorViewModel.removeBuilding(it) },
+                    onRemoveElement = { b, level, e -> editorViewModel.removeElement(b, level, e) },
+                    onSave = { editorViewModel.save() },
+                    onReload = { editorViewModel.reload() },
+                    onGoMyLocation = { editorViewModel.goToMyLocation() },
+                    onCenterConsumed = { editorViewModel.consumeCenterRequest(it) },
+                    onGoToPoint = { editorViewModel.goTo(it) },
+                    onGoSettings = { showSettings = true },
+                    contentPadding = contentPadding,
+                    active = onMapTab,
+                    modifier = Modifier.visible(onMapTab),
+                )
+            }
+
+            // key 里带上 showSettings：设置页与「我的」是两个不同的可保存状态
+            val pageKey = if (showSettings) "settings" else selectedTab.name
 
             stateHolder.SaveableStateProvider(key = pageKey) {
                 when {
@@ -169,7 +180,10 @@ fun AppShell(
                         contentPadding = contentPadding,
                     )
 
-                    selectedTab == NavTab.Map -> mapContent()
+                    // 地图不做条件分支：它已经常驻在上面了。
+                    // 这里只在 Map 页签时补一层透明占位，保证 Box 里始终有内容盖住地图的
+                    // 边角（地图自己已设为 INVISIBLE，理论上不需要，但多一层更保险）。
+                    selectedTab == NavTab.Map -> Unit
 
                     else -> ProfileScreen(
                         state = navState,
@@ -193,3 +207,14 @@ fun AppShell(
         }
     }
 }
+
+/**
+ * 页面可见性。
+ *
+ * 隐藏时只做 alpha，**不消费触摸事件** —— 这一层只在 Map 页签激活时可见，
+ * 其余时候上面还盖着别的页面（它们的容器会吃掉命中测试），
+ * 所以不需要像早先那样额外挂一个 pointerInput 去吞手势；
+ * 而且那个做法当时还引发了「隐藏页挡住可见页」的问题。
+ */
+private fun Modifier.visible(visible: Boolean): Modifier =
+    this.then(if (visible) Modifier else Modifier.alpha(0f))

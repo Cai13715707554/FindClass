@@ -1,6 +1,9 @@
 package com.school.nav.ui.editor
 
 import android.graphics.Color
+import android.graphics.Point
+import android.view.MotionEvent
+import android.view.View
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -20,6 +23,7 @@ import com.amap.api.maps.model.Polygon
 import com.amap.api.maps.model.PolygonOptions
 import com.amap.api.maps.model.Polyline
 import com.amap.api.maps.model.PolylineOptions
+import com.amap.api.maps.Projection
 import com.school.nav.core.data.EditorBuilding
 import com.school.nav.core.model.ElementType
 import com.school.nav.core.model.Geo
@@ -66,8 +70,27 @@ fun AmapEditorView(
     buildings: List<EditorBuilding>,
     centerRequest: CenterRequest?,
     onMapClick: (LngLat) -> Unit,
+    onDragStart: (LngLat) -> Unit,
+    onDragUpdate: (LngLat) -> Unit,
+    onDragEnd: (LngLat) -> Unit,
     onCenterConsumed: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 是否处于拖拽绘制模式（教室 / 办公室 / 教学楼）。
+     *
+     * 拖拽期间必须**关掉地图平移**，否则手指一拖地图就跟着走，根本框不准。
+     * 单点模式（楼梯口 / 卫生间）不需要，保持地图可平移。
+     */
+    draggingEnabled: Boolean = false,
+    /**
+     * 这一页当前是否在前台可见。
+     *
+     * 地图页在 AppShell 里是**常驻组合树**的 —— 一旦离开组合树，MapView 对象就会被
+     * 销毁重建，相机位置与 overlay 全丢，表现就是「切回来地图刷新了」。
+     * 所以切页签时不移除它，只靠这个标志把 MapView 设为 INVISIBLE 并停掉手势：
+     * 既不后台白白渲染 GL，也不会拦住别的页面的点击。
+     */
+    active: Boolean = true,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -78,10 +101,10 @@ fun AmapEditorView(
         MapView(context).apply { onCreate(null) }
     }
 
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, active) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_RESUME -> if (active) mapView.onResume()
                 Lifecycle.Event.ON_PAUSE -> mapView.onPause()
                 else -> Unit
             }
@@ -89,14 +112,23 @@ fun AmapEditorView(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            mapView.onDestroy()
+            // 离开这一页时暂停：避免后台持续渲染 GL
+            if (!active) mapView.onPause()
         }
+    }
+
+    // 真正离开组合树时才释放
+    DisposableEffect(Unit) {
+        onDispose { mapView.onDestroy() }
     }
 
     AndroidView(
         modifier = modifier,
         factory = { mapView },
         update = { view ->
+            // 非激活：INVISIBLE 而不是 GONE —— 不绘制、不接收触摸，但对象存活
+            view.visibility = if (active) View.VISIBLE else View.INVISIBLE
+
             val aMap = view.map ?: return@AndroidView
 
             if (!overlayState.configured) {
@@ -104,23 +136,92 @@ fun AmapEditorView(
                 configureMap(aMap)
             }
 
-            // 每次重组都重设监听，回调里用的 onMapClick 才是最新的
-            aMap.setOnMapClickListener { latLng ->
-                onMapClick(LngLat(lng = latLng.longitude, lat = latLng.latitude))
-            }
-
-            // 居中请求：带 token，消费一次就通知上层清空，避免每次重组都重置相机
-            centerRequest?.let { request ->
-                aMap.animateCamera(
-                    CameraUpdateFactory.newLatLngZoom(request.point.toLatLng(), request.zoom),
+            if (active) {
+                installTouchHandling(
+                    aMap = aMap,
+                    draggingEnabled = draggingEnabled,
+                    onMapClick = onMapClick,
+                    onDragStart = onDragStart,
+                    onDragUpdate = onDragUpdate,
+                    onDragEnd = onDragEnd,
                 )
-                onCenterConsumed(request.token)
+                // 居中请求：带 token，消费一次就通知上层清空，避免每次重组都重置相机
+                centerRequest?.let { request ->
+                    aMap.animateCamera(
+                        CameraUpdateFactory.newLatLngZoom(request.point.toLatLng(), request.zoom),
+                    )
+                    onCenterConsumed(request.token)
+                }
+            } else {
+                aMap.setOnMapClickListener(null)
+                aMap.setOnMapTouchListener(null)
+                aMap.uiSettings.isScrollGesturesEnabled = false
             }
 
             redraw(aMap, overlayState, draftPoints, buildings)
         },
     )
 }
+
+/**
+ * 装触摸处理：点一下 = 放单点元素；按住拖 = 框矩形。
+ *
+ * 为什么用 `setOnMapTouchListener` 而不是 `setOnMapClickListener`：
+ * 后者只有「点击」这一个语义，拿不到按下 / 移动 / 抬起，没法做拖拽框选。
+ * 这里用 DOWN / MOVE / UP 自己区分「点」和「拖」，并且把屏幕坐标经
+ * `Projection` 换算成经纬度。
+ *
+ * 拖拽期间关掉滚动手势，拖完再恢复 —— 否则地图会跟着手指平移，框不准。
+ */
+private fun installTouchHandling(
+    aMap: AMap,
+    draggingEnabled: Boolean,
+    onMapClick: (LngLat) -> Unit,
+    onDragStart: (LngLat) -> Unit,
+    onDragUpdate: (LngLat) -> Unit,
+    onDragEnd: (LngLat) -> Unit,
+) {
+    if (!draggingEnabled) {
+        aMap.setOnMapTouchListener(null)
+        aMap.uiSettings.isScrollGesturesEnabled = true
+        aMap.setOnMapClickListener { latLng ->
+            onMapClick(LngLat(lng = latLng.longitude, lat = latLng.latitude))
+        }
+        return
+    }
+
+    aMap.setOnMapClickListener(null)
+    aMap.setOnMapTouchListener { event ->
+        val projection = aMap.projection ?: return@setOnMapTouchListener
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                // 按下就先别让地图动，等看清是点还是拖
+                aMap.uiSettings.isScrollGesturesEnabled = false
+                toLngLat(projection, event.x, event.y)?.let(onDragStart)
+            }
+
+            MotionEvent.ACTION_MOVE ->
+                toLngLat(projection, event.x, event.y)?.let(onDragUpdate)
+
+            MotionEvent.ACTION_UP -> {
+                aMap.uiSettings.isScrollGesturesEnabled = true
+                toLngLat(projection, event.x, event.y)?.let(onDragEnd)
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                aMap.uiSettings.isScrollGesturesEnabled = true
+            }
+        }
+        false
+    }
+}
+
+/** 屏幕坐标 -> 经纬度。转换失败返回 null。 */
+private fun toLngLat(projection: Projection, x: Float, y: Float): LngLat? =
+    runCatching {
+        val latLng = projection.fromScreenLocation(Point(x.toInt(), y.toInt()))
+        LngLat(lng = latLng.longitude, lat = latLng.latitude)
+    }.getOrNull()
 
 /** overlay 句柄 + 一次性初始化标记。 */
 private class OverlayState {

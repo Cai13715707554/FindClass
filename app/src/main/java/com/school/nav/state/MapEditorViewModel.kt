@@ -41,6 +41,14 @@ data class CenterRequest(
  */
 const val MAX_FLOOR_COUNT: Int = 100
 
+/**
+ * 拖拽矩形的两条边最短要多少度（约 1e-5 度 ≈ 1 米）。
+ *
+ * 低于这个值说明用户只是点了一下、没真拖开 —— 那种情况下应该提示而不是
+ * 存一个针尖大的图形进去。也顺便过滤掉手指抖动引起的误触。
+ */
+private const val MIN_SPAN_DEGREES = 1e-5
+
 /** 编辑器界面状态。 */
 data class EditorUiState(
     val hasApiKey: Boolean = false,
@@ -63,7 +71,10 @@ data class EditorUiState(
     val endFloorLevel: Int = 1,
 
     // ---- 草稿 ----
+    /** 拖拽预览：当前图形（矩形四个角 / 单点一个点）。 */
     val draftPoints: List<LngLat> = emptyList(),
+    /** 拖拽起点；非 null 表示正在拖。 */
+    val dragStart: LngLat? = null,
     val draftName: String = "",
     /** 新建楼栋时填的楼层数，成面后落到 [EditorBuilding.floorCount]。 */
     val draftFloorCount: Int = com.school.nav.core.data.EditorBuilding.DEFAULT_FLOOR_COUNT,
@@ -207,36 +218,88 @@ class MapEditorViewModel(
 
     // ------------------------------------------------------------ 绘制
 
-    fun addPoint(point: LngLat) {
-        if (!_uiState.value.canDraw) {
+    /**
+     * 点了一下地图（没有拖动）。
+     *
+     * 单点元素（楼梯口 / 卫生间）：**直接落点并结束** —— 点一下就是它，
+     * 不需要拖也不需要命名弹窗，再弹个窗反而啰嗦。
+     *
+     * 非单点元素：不落点，只提示要按住拖动框选范围。这是用户明确要求的
+     * 「别让人靠点三个点来划定位置」：逐点点选又慢又难对齐。
+     */
+    fun onTap(point: LngLat) {
+        val state = _uiState.value
+        if (!state.canDraw) {
             emit("请先选定要画在哪栋楼，再开始绘制")
             return
         }
-        _uiState.value = _uiState.value.copy(draftPoints = _uiState.value.draftPoints + point)
+        if (!state.mode.isPoint) {
+            emit("按住拖动框出范围（不用逐点点选）")
+            return
+        }
+        commitPoints(points = listOf(point), name = state.draftName)
     }
 
-    fun undoPoint() {
-        val points = _uiState.value.draftPoints
-        if (points.isEmpty()) return
-        _uiState.value = _uiState.value.copy(draftPoints = points.dropLast(1))
-    }
-
-    fun cancelDraft() {
-        _uiState.value = _uiState.value.copy(draftPoints = emptyList())
+    /** 拖拽开始：记下起点。 */
+    fun onDragStart(point: LngLat) {
+        val state = _uiState.value
+        if (!state.canDraw || state.mode.isPoint) return
+        _uiState.value = state.copy(dragStart = point, draftPoints = listOf(point))
     }
 
     /**
-     * 结束当前多边形。
+     * 拖拽中：按「起点 → 当前点」实时刷新矩形预览。
      *
-     * 三种落点：
-     *  - 教学楼模式：轮廓挂到「同名楼栋」上（不存在就新建），名字取输入框；
-     *  - 楼层元素模式：挂到 [EditorUiState.targetBuildingId] 的 [EditorUiState.floorLevel] 层；
-     *  - 顶点不足 3 个：拒绝并提示。
+     * 预览直接写进 draftPoints（四个角），地图那层不需要知道有「拖拽」这回事，
+     * 照常把 draftPoints 画成多边形就行。
+     */
+    fun onDragUpdate(point: LngLat) {
+        val state = _uiState.value
+        val start = state.dragStart ?: return
+        _uiState.value = state.copy(
+            draftPoints = EditorBuilding.rectangleFromCorners(start, point),
+        )
+    }
+
+    /** 拖拽结束：把矩形定下来并走正常的成面流程。 */
+    fun onDragEnd(point: LngLat) {
+        val state = _uiState.value
+        val start = state.dragStart ?: return
+        val rect = EditorBuilding.rectangleFromCorners(start, point)
+
+        if (spanTooSmall(rect)) {
+            // 只是点了一下、没真正拖开：清掉预览并提示，别留下针尖大的图形
+            _uiState.value = state.copy(draftPoints = emptyList(), dragStart = null)
+            emit("拖动范围太小，按住往对角方向拖出一片区域")
+            return
+        }
+
+        _uiState.value = state.copy(draftPoints = rect, dragStart = null)
+        finishDraft()
+    }
+
+    /** 放弃当前预览。 */
+    fun cancelDraft() {
+        _uiState.value = _uiState.value.copy(draftPoints = emptyList(), dragStart = null)
+    }
+
+    /**
+     * 结束当前图形。
+     *
+     * 两种落点：
+     *  - 教学楼模式：轮廓挂到「同名楼栋」上（不存在就新建）；
+     *  - 楼层元素模式：挂到目标楼栋的目标楼层。
      */
     fun finishDraft() {
         val state = _uiState.value
         if (!state.canFinishDraft) {
-            emit("至少需要 ${EditorUiState.MIN_POLYGON_POINTS} 个点才能围成一个面")
+            emit(
+                if (state.mode.isPoint) {
+                    "在地图上点一下放置${state.mode.label}"
+                } else {
+                    "至少需要 ${EditorUiState.MIN_POLYGON_POINTS} 个点才能围成一个面"
+                },
+            )
             return
         }
 
@@ -245,6 +308,51 @@ class MapEditorViewModel(
         } else {
             finishFloorElement(state)
         }
+    }
+
+    /**
+     * 落一个点就完成的元素（楼梯口 / 卫生间）。
+     *
+     * 这两个类型没有确定边界，画矩形纯属白费功夫，导航也只需要知道它「在哪」。
+     * 楼梯还会带上「结束楼层」表示跨几层。
+     */
+    private fun commitPoints(points: List<LngLat>, name: String) {
+        val state = _uiState.value
+        val target = state.targetBuilding ?: run {
+            emit("请先选定要画在哪栋楼")
+            return
+        }
+        val mode = state.mode
+        val label = name.trim().ifBlank { mode.label }
+
+        val existingElements = target.floor(state.floorLevel)?.elements.orEmpty()
+        val element = EditorElement.from(
+            mode = mode,
+            id = generateElementId(mode, label, existingElements),
+            name = label,
+            points = points,
+            toLevel = if (state.isCrossFloorMode) state.endFloorLevel else null,
+        )
+
+        _uiState.value = state.copy(
+            buildings = state.buildings.map {
+                if (it.id != target.id) it else it.withAddedElement(state.floorLevel, element)
+            },
+            draftPoints = emptyList(),
+            dragStart = null,
+            draftName = "",
+        )
+        emit("已放置「$label」在 ${target.name} ${state.floorLevel} 楼")
+    }
+
+    /** 矩形面积太小就认为用户只是想点一下、没真拖。 */
+    private fun spanTooSmall(rect: List<LngLat>): Boolean {
+        if (rect.size < 4) return true
+        val minLng = rect.minOf { it.lng }
+        val maxLng = rect.maxOf { it.lng }
+        val minLat = rect.minOf { it.lat }
+        val maxLat = rect.maxOf { it.lat }
+        return (maxLng - minLng) < MIN_SPAN_DEGREES || (maxLat - minLat) < MIN_SPAN_DEGREES
     }
 
     private fun finishBuildingOutline(state: EditorUiState) {
@@ -289,37 +397,25 @@ class MapEditorViewModel(
         // target 已经过非空检查，后续都用它而不是再读一次 state.targetBuilding ——
         // 读属性会丢掉智能转换，编译器只能当成可空类型
         val existingElements = target.floor(state.floorLevel)?.elements.orEmpty()
-        val toLevel = if (state.isCrossFloorMode) state.endFloorLevel else null
         val element = EditorElement.from(
             mode = mode,
             id = generateElementId(mode, name, existingElements),
             name = name,
             points = state.draftPoints,
-            toLevel = toLevel,
+            toLevel = if (state.isCrossFloorMode) state.endFloorLevel else null,
         )
-
-        val newFloors = if (target.floor(state.floorLevel) == null) {
-            target.floors + FloorDraft(level = state.floorLevel, elements = listOf(element))
-        } else {
-            target.floors.map {
-                if (it.level == state.floorLevel) {
-                    it.copy(elements = it.elements + element)
-                } else {
-                    it
-                }
-            }
-        }
 
         _uiState.value = state.copy(
             buildings = state.buildings.map {
-                if (it.id == target.id) it.copy(floors = newFloors.sortedBy { f -> f.level }) else it
+                if (it.id == target.id) it.withAddedElement(state.floorLevel, element) else it
             },
             draftPoints = emptyList(),
+            dragStart = null,
             draftName = "",
         )
         emit(
-            if (toLevel != null) {
-                "已在 ${target.name} 添加「$name」（${state.floorLevel}→${toLevel} 楼，每层都会生成）"
+            if (element.isCrossFloor) {
+                "已在 ${target.name} 添加「$name」（${state.floorLevel}→${element.toLevel} 楼，每层都会生成）"
             } else {
                 "已在 ${target.name} ${state.floorLevel} 楼添加「$name」"
             },

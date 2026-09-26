@@ -11,14 +11,30 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
+ * 元素在编辑器里的画法。
+ *
+ * 用户的诉求是「别让人靠点三个点来划定位置」—— 逐点点选又慢又难对齐，
+ * PS 那种拖拽才顺手：
+ *
+ *  - [Rectangle]：**按住拖出一个矩形**（教学楼外轮廓 / 教室 / 办公室）。
+ *    矩形是最常见的房间形状，拖一下就有四条边，不需要逐点点选。
+ *  - [Point]：**点一下就是一个点**（楼梯口 / 卫生间）。
+ *    这两类东西本来就没有明确边界，画矩形纯属白费功夫，
+ *    而导航只需要知道它「在哪」。楼梯还额外带一个「结束楼层」表示跨几层。
+ *
+ * 存进数据时**统一还是点串**（[EditorElement.points]）：矩形是四个角、点是一个点。
+ * 这样导航算法（质心、左右判定、走廊排序）完全不需要为形态分叉。
+ */
+enum class ElementShape {
+    Rectangle,
+    Point,
+}
+
+/**
  * 编辑器绘制模式。
  *
  * 每一种对应 [ElementType] 的一个取值，界面右上角的下拉菜单就是在这几种之间切换。
  * 已随数据类型一起删除「电梯口」「入口」两个模式。
- *
- * 之所以要区分「教学楼」和「教室」：画楼栋外轮廓和画楼层内的房间用的是同一套交互
- * （点选顶点围多边形），但产出物完全不同 ——
- * 前者进 [EditorBuilding.polygon]，后者进某栋楼某层的 [EditorElement]。
  */
 enum class EditorMode(
     val label: String,
@@ -26,13 +42,18 @@ enum class EditorMode(
     val elementType: ElementType?,
     /** 是否需要先选定一栋楼（楼层内元素都属于某栋楼）。 */
     val needsBuilding: Boolean = true,
+    /** 画法：拖拽矩形还是单点。 */
+    val shape: ElementShape = ElementShape.Rectangle,
 ) {
-    Building("教学楼", elementType = null, needsBuilding = false),
+    Building("教学楼", elementType = null, needsBuilding = false, shape = ElementShape.Rectangle),
     Room("教室", ElementType.Room),
     Office("办公室", ElementType.Office),
-    Stair("楼梯口", ElementType.Stair),
-    Toilet("卫生间", ElementType.Toilet),
+    Stair("楼梯口", ElementType.Stair, shape = ElementShape.Point),
+    Toilet("卫生间", ElementType.Toilet, shape = ElementShape.Point),
     ;
+
+    /** 是否是单点元素（点一下即可，不需要拖）。 */
+    val isPoint: Boolean get() = shape == ElementShape.Point
 
     companion object {
         /** 下拉菜单里的顺序，最常用的放前面。 */
@@ -68,9 +89,20 @@ data class EditorElement(
 ) {
     val elementType: ElementType get() = ElementType.fromRaw(type)
 
-    /** 少于三个点、或点全重合时围不成面，存进去也没意义。 */
+    /** 是否是单点元素（楼梯口 / 卫生间）。这些类型本来就没有边界。 */
+    val isPoint: Boolean get() = points.size == 1
+
+    /**
+     * 数据是否可用。
+     *
+     * 单点元素只需要一个点；矩形/多边形至少三个不重合的点，否则围不成面。
+     */
     val isValid: Boolean
-        get() = points.size >= MIN_POLYGON_POINTS && points.distinct().size >= MIN_POLYGON_POINTS
+        get() = if (isPoint) {
+            true
+        } else {
+            points.size >= MIN_POLYGON_POINTS && points.distinct().size >= MIN_POLYGON_POINTS
+        }
 
     /** 是否跨越多个楼层。层号记在 [FloorDraft.level] 上，这里只能看有没有 [toLevel]。 */
     val isCrossFloor: Boolean get() = toLevel != null
@@ -131,9 +163,27 @@ data class EditorBuilding(
 ) {
     /** 轮廓是否构成有效多边形。 */
     val hasValidPolygon: Boolean
-        get() = polygon.size >= MIN_POLYGON_POINTS && polygon.distinct().size >= MIN_POLYGON_POINTS
+        get() = EditorBuilding.isValidPolygon(polygon)
 
     fun floor(level: Int): FloorDraft? = floors.firstOrNull { it.level == level }
+
+    /**
+     * 往某一层追加一个元素。
+     *
+     * 该层还没有 FloorDraft 时会新建一个。楼层按 level 排序，保证配置文件的
+     * 字段顺序稳定（便于 diff 与人工查看）。
+     */
+    fun withAddedElement(level: Int, element: EditorElement): EditorBuilding {
+        val existing = floor(level)
+        val newFloors = if (existing == null) {
+            floors + FloorDraft(level = level, elements = listOf(element))
+        } else {
+            floors.map {
+                if (it.level == level) it.copy(elements = it.elements + element) else it
+            }
+        }
+        return copy(floors = newFloors.sortedBy { it.level })
+    }
 
     /** 该楼一共画了多少个元素（跨层统计，楼梯只算一次）。 */
     val elementCount: Int get() = floors.sumOf { it.elements.size }
@@ -203,6 +253,30 @@ data class EditorBuilding(
 
         /** 新建楼栋时的默认层数。 */
         const val DEFAULT_FLOOR_COUNT = 5
+
+        /** 几个点够围成一个面（不与任何点重合、且至少三个）。 */
+        fun isValidPolygon(points: List<LngLat>): Boolean =
+            points.size >= MIN_POLYGON_POINTS && points.distinct().size >= MIN_POLYGON_POINTS
+
+        /**
+         * 由两个对角点生成矩形的四个角（西南 → 东南 → 东北 → 西北）。
+         *
+         * 拖拽绘制用：用户从一角拖到另一角就得到这个矩形。
+         * 点串顺序与 `tools/gen-buildings-json.mjs` 里 `rect()` 的产出一致，
+         * 这样资产数据与编辑器数据在算法眼里是同样的形状。
+         */
+        fun rectangleFromCorners(a: LngLat, b: LngLat): List<LngLat> {
+            val westLng = minOf(a.lng, b.lng)
+            val eastLng = maxOf(a.lng, b.lng)
+            val southLat = minOf(a.lat, b.lat)
+            val northLat = maxOf(a.lat, b.lat)
+            return listOf(
+                LngLat(westLng, southLat),
+                LngLat(eastLng, southLat),
+                LngLat(eastLng, northLat),
+                LngLat(westLng, northLat),
+            )
+        }
 
         /**
          * 编辑器新增楼层时假定的层高（米）。

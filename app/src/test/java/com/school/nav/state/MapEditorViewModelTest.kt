@@ -21,8 +21,14 @@ import java.nio.file.Files
 /**
  * 地图编辑器状态机测试。
  *
- * 绘制逻辑（增删顶点、成面门槛、命名、id 冲突、楼层归属、存盘）刻意不依赖高德 SDK，
- * 所以能在纯 JVM 上测干净 —— 地图渲染本身需要真机与有效 Key，这里不覆盖。
+ * 交互模型（用户要求「别让人靠点三个点来划定位置」之后定的）：
+ *
+ *  - **拖拽矩形**：教学楼 / 教室 / 办公室 —— 按住从一角拖到对角；
+ *  - **点击落点**：楼梯口 / 卫生间 —— 点一下就放置，不用画边界；
+ *  - 楼梯还要选起始层与结束层，合并时在覆盖的每一层都生成一份。
+ *
+ * 绘制逻辑刻意不依赖高德 SDK，所以能在纯 JVM 上测干净；
+ * 地图渲染本身需要真机与有效 Key，这里不覆盖。
  */
 class MapEditorViewModelTest {
 
@@ -82,17 +88,21 @@ class MapEditorViewModelTest {
             repository = repository,
         )
 
-    private fun point(i: Int) = LngLat(113.13 + i * 0.0005, 23.13 + i * 0.0004)
+    private val dragFrom = LngLat(113.1300, 23.1300)
+    private val dragTo = LngLat(113.1304, 23.1303)
 
-    private fun addPoints(vm: MapEditorViewModel, count: Int) {
-        repeat(count) { vm.addPoint(point(it)) }
+    /** 模拟一次拖拽：按下 → 移动 → 抬起。 */
+    private fun drag(vm: MapEditorViewModel, from: LngLat = dragFrom, to: LngLat = dragTo) {
+        vm.onDragStart(from)
+        vm.onDragUpdate(to)
+        vm.onDragEnd(to)
     }
 
-    /** 画一栋楼并命名。 */
-    private fun drawBuilding(vm: MapEditorViewModel, name: String, points: Int = 3) {
+    /** 拖出一栋楼并命名（名字必须在成面**之前**设好，finishDraft 会立刻提交）。 */
+    private fun drawBuilding(vm: MapEditorViewModel, name: String) {
         vm.setMode(EditorMode.Building)
-        addPoints(vm, points)
         vm.setDraftName(name)
+        drag(vm)
         vm.finishDraft()
     }
 
@@ -105,63 +115,90 @@ class MapEditorViewModelTest {
         assertTrue(state.draftPoints.isEmpty())
         assertTrue(state.buildings.isEmpty())
         assertFalse(state.canFinishDraft)
+        assertNull(state.dragStart)
         assertEquals("默认应是教学楼模式", EditorMode.Building, state.mode)
     }
 
-    // ------------------------------------------------------------ 绘制教学楼
+    // ------------------------------------------------------------ 拖拽矩形
 
     @Test
-    fun `点击会累积顶点`() {
+    fun `拖拽会实时生成矩形预览`() {
         val vm = viewModel()
-        addPoints(vm, 3)
-        assertEquals(3, vm.uiState.value.draftPoints.size)
-        assertEquals(point(0), vm.uiState.value.draftPoints.first())
+        vm.setMode(EditorMode.Building)
+
+        vm.onDragStart(dragFrom)
+        assertEquals("按下瞬间只有一个点", 1, vm.uiState.value.draftPoints.size)
+
+        vm.onDragUpdate(dragTo)
+        val preview = vm.uiState.value.draftPoints
+        assertEquals("拖拽中应预览矩形四个角", 4, preview.size)
+        // 矩形四个角的经纬度范围应与两个对角点一致
+        assertEquals(dragFrom.lng, preview.minOf { it.lng }, 1e-9)
+        assertEquals(dragTo.lng, preview.maxOf { it.lng }, 1e-9)
+        assertEquals(dragFrom.lat, preview.minOf { it.lat }, 1e-9)
+        assertEquals(dragTo.lat, preview.maxOf { it.lat }, 1e-9)
     }
 
     @Test
-    fun `撤销会移除最后一个顶点`() {
+    fun `拖拽结束会成面并清空草稿`() {
         val vm = viewModel()
-        addPoints(vm, 3)
-        vm.undoPoint()
-        assertEquals(2, vm.uiState.value.draftPoints.size)
-        assertEquals(point(1), vm.uiState.value.draftPoints.last())
-    }
-
-    @Test
-    fun `空顶点时撤销不会出错`() {
-        val vm = viewModel()
-        vm.undoPoint()
-        assertTrue(vm.uiState.value.draftPoints.isEmpty())
-    }
-
-    @Test
-    fun `少于三个点时不允许成面`() {
-        val vm = viewModel()
-        addPoints(vm, 2)
-        assertFalse(vm.uiState.value.canFinishDraft)
-
-        vm.finishDraft()
-
-        assertTrue("顶点不足时不应生成楼栋", vm.uiState.value.buildings.isEmpty())
-        assertEquals("顶点应保留，不该被清掉", 2, vm.uiState.value.draftPoints.size)
-    }
-
-    @Test
-    fun `三个点可以成面并清空草稿`() {
-        val vm = viewModel()
-        drawBuilding(vm, "A栋", points = 3)
+        vm.setMode(EditorMode.Building)
+        vm.setDraftName("A栋")
+        drag(vm)
 
         val state = vm.uiState.value
         assertEquals(1, state.buildings.size)
         assertEquals("A栋", state.buildings.first().name)
-        assertEquals(3, state.buildings.first().polygon.size)
+        assertEquals(4, state.buildings.first().polygon.size)
         assertTrue("成面后草稿应清空", state.draftPoints.isEmpty())
+        assertNull("拖拽状态应复位", state.dragStart)
     }
 
     @Test
-    fun `未命名时给一个默认名字而不是空字符串`() {
+    fun `拖拽范围太小不会留下针尖大的图形`() {
         val vm = viewModel()
-        addPoints(vm, 3)
+        vm.setMode(EditorMode.Building)
+
+        // 几乎没移动
+        vm.onDragStart(dragFrom)
+        vm.onDragEnd(LngLat(dragFrom.lng + 1e-9, dragFrom.lat))
+
+        assertTrue("范围太小不应成面", vm.uiState.value.buildings.isEmpty())
+        assertTrue("预览应被清掉", vm.uiState.value.draftPoints.isEmpty())
+    }
+
+    @Test
+    fun `取消草稿会清掉预览`() {
+        val vm = viewModel()
+        vm.setMode(EditorMode.Building)
+        vm.onDragStart(dragFrom)
+        vm.onDragUpdate(dragTo)
+
+        vm.cancelDraft()
+
+        assertTrue(vm.uiState.value.draftPoints.isEmpty())
+        assertNull(vm.uiState.value.dragStart)
+    }
+
+    @Test
+    fun `单点模式不会响应拖拽`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val id = vm.uiState.value.buildings.first().id
+        vm.setMode(EditorMode.Toilet)
+        vm.setTargetBuilding(id)
+
+        vm.onDragStart(dragFrom)
+        vm.onDragUpdate(dragTo)
+
+        assertTrue("单点元素不该产生拖拽预览", vm.uiState.value.draftPoints.isEmpty())
+    }
+
+    @Test
+    fun `教学楼未命名时给一个默认名字`() {
+        val vm = viewModel()
+        vm.setMode(EditorMode.Building)
+        drag(vm)
         vm.finishDraft()
         assertTrue(vm.uiState.value.buildings.first().name.isNotBlank())
     }
@@ -169,35 +206,26 @@ class MapEditorViewModelTest {
     @Test
     fun `同名楼栋再次成面视为重画轮廓并保留楼层`() {
         val vm = viewModel()
-        drawBuilding(vm, "A栋", points = 3)
+        drawBuilding(vm, "A栋")
 
-        // 给 A 栋补一个教室
+        // 给 A 栋补一个教室（用另一个位置，避免与楼栋轮廓重叠）
         vm.setMode(EditorMode.Room)
         vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
-        addPoints(vm, 3)
         vm.setDraftName("101")
+        drag(vm, LngLat(113.1400, 23.1400), LngLat(113.1404, 23.1403))
         vm.finishDraft()
         assertEquals(1, vm.uiState.value.buildings.first().elementCount)
 
-        // 重画外轮廓
-        drawBuilding(vm, "A栋", points = 4)
+        // 重画外轮廓（换个位置，仍然同名）
+        vm.setMode(EditorMode.Building)
+        vm.setDraftName("A栋")
+        drag(vm, LngLat(113.1500, 23.1500), LngLat(113.1504, 23.1503))
+        vm.finishDraft()
 
         val building = vm.uiState.value.buildings.single()
         assertEquals("应仍是一栋楼，不是新增一栋", 1, vm.uiState.value.buildings.size)
         assertEquals(4, building.polygon.size)
         assertEquals("重画轮廓不能把楼层元素弄丢", 1, building.elementCount)
-    }
-
-    @Test
-    fun `重画会清掉草稿但不影响已画楼栋`() {
-        val vm = viewModel()
-        drawBuilding(vm, "A栋")
-        addPoints(vm, 4)
-
-        vm.cancelDraft()
-
-        assertTrue(vm.uiState.value.draftPoints.isEmpty())
-        assertEquals(1, vm.uiState.value.buildings.size)
     }
 
     @Test
@@ -211,99 +239,84 @@ class MapEditorViewModelTest {
         assertTrue(vm.uiState.value.buildings.isEmpty())
     }
 
-    // ------------------------------------------------------------ 楼层元素
+    // ------------------------------------------------------------ 单点元素
 
     @Test
-    fun `楼层元素模式必须先选目标楼栋`() {
-        val vm = viewModel()
-        vm.setMode(EditorMode.Room)
-
-        assertFalse("没选楼时不应该能画", vm.uiState.value.canDraw)
-
-        addPoints(vm, 3)
-        vm.finishDraft()
-
-        assertTrue("没选楼栋时不应落下元素", vm.uiState.value.buildings.isEmpty())
-    }
-
-    @Test
-    fun `选定楼栋后可以画教室并挂到指定楼层`() {
-        val vm = viewModel()
-        drawBuilding(vm, "A栋")
-        val buildingId = vm.uiState.value.buildings.first().id
-
-        vm.setMode(EditorMode.Room)
-        vm.setTargetBuilding(buildingId)
-        vm.setFloorLevel(3)
-        assertTrue(vm.uiState.value.canDraw)
-
-        addPoints(vm, 3)
-        vm.setDraftName("高一(1)班")
-        vm.finishDraft()
-
-        val building = vm.uiState.value.buildings.single()
-        val floor = building.floor(3)
-        assertNotNull("应落在 3 楼", floor)
-        assertEquals(1, floor!!.elements.size)
-        assertEquals("高一(1)班", floor.elements.first().name)
-        assertEquals(ElementType.Room, floor.elements.first().elementType)
-    }
-
-    @Test
-    fun `不同模式的元素类型正确落库`() {
+    fun `点一下就能放置卫生间`() {
         val vm = viewModel()
         drawBuilding(vm, "A栋")
         val id = vm.uiState.value.buildings.first().id
-        vm.setTargetBuilding(id)
 
-        val cases = listOf(
-            EditorMode.Stair to ElementType.Stair,
-            EditorMode.Toilet to ElementType.Toilet,
-            EditorMode.Office to ElementType.Office,
+        vm.setMode(EditorMode.Toilet)
+        vm.setTargetBuilding(id)
+        vm.setDraftName("卫生间1")
+        vm.onTap(LngLat(113.1302, 23.1301))
+
+        val building = vm.uiState.value.buildings.single()
+        val element = building.floor(1)!!.elements.single()
+        assertEquals(ElementType.Toilet, element.elementType)
+        assertEquals("卫生间1", element.name)
+        assertEquals("单点元素只存一个点", 1, element.points.size)
+        assertTrue("单点元素应判为有效", element.isValid)
+    }
+
+    @Test
+    fun `单点元素模式下点地图不会提示要拖拽`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.setMode(EditorMode.Stair)
+        vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
+        vm.setDraftName("东楼梯口")
+
+        vm.onTap(LngLat(113.1302, 23.1301))
+
+        assertEquals(
+            "点一下就应落点",
+            1,
+            vm.uiState.value.buildings.single().floor(1)!!.elements.size,
         )
-        for ((mode, expected) in cases) {
-            vm.setMode(mode)
-            addPoints(vm, 3)
-            vm.setDraftName(mode.label + "1")
-            vm.finishDraft()
-            val elements = vm.uiState.value.buildings.single().floor(1)!!.elements
-            assertEquals(
-                "${mode.label} 的类型应落成 $expected",
-                expected,
-                elements.last().elementType,
-            )
-        }
+    }
+
+    @Test
+    fun `矩形模式下点地图不会落点`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.setMode(EditorMode.Room)
+        vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
+
+        vm.onTap(LngLat(113.1302, 23.1301))
+
+        assertTrue(
+            "矩形模式应提示拖动而不是落一个点",
+            vm.uiState.value.buildings.single().elementCount == 0,
+        )
     }
 
     @Test
     fun `楼梯可选起止楼层并在每一层都生成`() {
         val vm = viewModel()
-        drawBuilding(vm, "A栋", points = 3)
+        drawBuilding(vm, "A栋")
         val id = vm.uiState.value.buildings.first().id
 
         vm.setMode(EditorMode.Stair)
         vm.setTargetBuilding(id)
         vm.setFloorLevel(2)
         vm.setEndFloorLevel(4)
+        vm.onTap(LngLat(113.1302, 23.1301))
 
-        addPoints(vm, 3)
-        vm.setDraftName("东楼梯口")
-        vm.finishDraft()
-
-        val building = vm.uiState.value.buildings.single()
-        // 原始草稿仍记在起始层，并带着结束层
-        val draft = building.floor(2)!!.elements.single()
-        assertEquals(4, draft.toLevel)
-        assertTrue("2→4 应判定为跨层", draft.isCrossFloor)
+        val draft = vm.uiState.value.buildings.single()
+        val element = draft.floor(2)!!.elements.single()
+        assertEquals(4, element.toLevel)
+        assertTrue("2→4 应判定为跨层", element.isCrossFloor)
 
         // 合并成导航数据时，2、3、4 楼都要有这份楼梯
-        val merged = building.toBuilding()
+        val merged = draft.toBuilding()
         for (level in 2..4) {
             val floor = merged.floorByLevel(level)
             assertNotNull("$level 楼应生成楼梯", floor)
             assertTrue(
                 "$level 楼应能找到同名楼梯",
-                floor!!.elements.any { it.name == "东楼梯口" },
+                floor!!.elements.any { it.name == element.name },
             )
         }
         assertNull("1 楼不应有这个楼梯", merged.floorByLevel(1))
@@ -315,6 +328,80 @@ class MapEditorViewModelTest {
         vm.setFloorLevel(3)
         vm.setEndFloorLevel(1)
         assertEquals("结束层应被抬到起始层", 3, vm.uiState.value.endFloorLevel)
+    }
+
+    // ------------------------------------------------------------ 楼栋与楼层
+
+    @Test
+    fun `非单点元素必须先选目标楼栋`() {
+        val vm = viewModel()
+        vm.setMode(EditorMode.Room)
+        assertFalse("没选楼时不应该能画", vm.uiState.value.canDraw)
+
+        drag(vm)
+
+        assertTrue("没选楼栋时不应落下元素", vm.uiState.value.buildings.isEmpty())
+    }
+
+    @Test
+    fun `不同模式的元素类型正确落库`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val id = vm.uiState.value.buildings.first().id
+        vm.setTargetBuilding(id)
+
+        // 矩形类
+        for ((mode, expected) in listOf(
+            EditorMode.Room to ElementType.Room,
+            EditorMode.Office to ElementType.Office,
+        )) {
+            vm.setMode(mode)
+            drag(vm, LngLat(113.1300 + mode.ordinal * 1e-4, 23.1300), dragTo)
+            vm.setDraftName(mode.label + "1")
+            vm.finishDraft()
+            val elements = vm.uiState.value.buildings.single().floor(1)!!.elements
+            assertEquals("${mode.label} 类型应落成 $expected", expected, elements.last().elementType)
+        }
+
+        // 单点类
+        vm.setMode(EditorMode.Toilet)
+        vm.setDraftName("卫生间1")
+        vm.onTap(LngLat(113.1309, 23.1302))
+        val toilet = vm.uiState.value.buildings.single().floor(1)!!.elements
+            .first { it.elementType == ElementType.Toilet }
+        assertEquals("卫生间1", toilet.name)
+        assertEquals("单点元素只存一个点", 1, toilet.points.size)
+    }
+
+    @Test
+    fun `切换模式会清空草稿避免串模式`() {
+        val vm = viewModel()
+        vm.setMode(EditorMode.Building)
+        vm.onDragStart(dragFrom)
+
+        vm.setMode(EditorMode.Stair)
+
+        assertTrue("切模式不该把上一模式的预览带过来", vm.uiState.value.draftPoints.isEmpty())
+    }
+
+    @Test
+    fun `删除单个元素`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        val id = vm.uiState.value.buildings.first().id
+        vm.setMode(EditorMode.Room)
+        vm.setTargetBuilding(id)
+        drag(vm)
+        vm.setDraftName("101")
+        vm.finishDraft()
+
+        val elementId = vm.uiState.value.buildings.single().floor(1)!!.elements.first().id
+        vm.removeElement(id, 1, elementId)
+
+        assertTrue(
+            "元素应被删除",
+            vm.uiState.value.buildings.single().floor(1)!!.elements.isEmpty(),
+        )
     }
 
     @Test
@@ -337,36 +424,6 @@ class MapEditorViewModelTest {
             vm.uiState.value.buildings.first().floorCount,
         )
     }
-
-    @Test
-    fun `切换模式会清空草稿避免串模式`() {
-        val vm = viewModel()
-        addPoints(vm, 2)
-        vm.setMode(EditorMode.Stair)
-        assertTrue("切模式不该把上一模式的顶点带过来", vm.uiState.value.draftPoints.isEmpty())
-    }
-
-    @Test
-    fun `删除单个元素`() {
-        val vm = viewModel()
-        drawBuilding(vm, "A栋")
-        val id = vm.uiState.value.buildings.first().id
-        vm.setMode(EditorMode.Room)
-        vm.setTargetBuilding(id)
-        addPoints(vm, 3)
-        vm.setDraftName("101")
-        vm.finishDraft()
-
-        val elementId = vm.uiState.value.buildings.single().floor(1)!!.elements.first().id
-        vm.removeElement(id, 1, elementId)
-
-        assertTrue(
-            "元素应被删除",
-            vm.uiState.value.buildings.single().floor(1)!!.elements.isEmpty(),
-        )
-    }
-
-    // ------------------------------------------------------------ id 冲突
 
     @Test
     fun `与内置楼栋同名的 id 会自动加后缀避免覆盖`() {
@@ -421,16 +478,15 @@ class MapEditorViewModelTest {
     }
 
     @Test
-    fun `保存后重新加载能读回楼栋与楼层元素`() {
+    fun `保存后重新加载能读回楼栋与单点元素`() {
         val vm = viewModel()
-        drawBuilding(vm, "B栋", points = 4)
+        drawBuilding(vm, "B栋")
         val id = vm.uiState.value.buildings.first().id
-        vm.setMode(EditorMode.Room)
+        vm.setMode(EditorMode.Toilet)
         vm.setTargetBuilding(id)
         vm.setFloorLevel(2)
-        addPoints(vm, 3)
-        vm.setDraftName("201")
-        vm.finishDraft()
+        vm.setDraftName("卫生间")
+        vm.onTap(LngLat(113.1302, 23.1301))
         vm.save()
 
         // 新建一个 VM 模拟重启 App
@@ -439,7 +495,9 @@ class MapEditorViewModelTest {
         assertEquals(1, reopened.size)
         assertEquals("B栋", reopened.first().name)
         assertEquals(4, reopened.first().polygon.size)
-        assertEquals("201", reopened.first().floor(2)!!.elements.single().name)
+        val element = reopened.first().floor(2)!!.elements.single()
+        assertEquals(ElementType.Toilet, element.elementType)
+        assertEquals(1, element.points.size)
     }
 
     // ------------------------------------------------------------ Key
