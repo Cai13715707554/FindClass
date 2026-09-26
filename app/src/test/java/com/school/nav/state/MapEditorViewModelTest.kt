@@ -130,6 +130,29 @@ class MapEditorViewModelTest {
     private fun externalFile(): File? =
         configStore.externalDir?.let { File(it, configStore.activeFileName()) }
 
+    /**
+     * 预置一份含「A栋」的配置，模拟「上次编辑保存过」。
+     *
+     * 用它建出来的 ViewModel，`buildings` 是**从文件读进来的**，
+     * 历史栈为空 —— 正好用来区分「数据本身」和「本次改动」。
+     */
+    private fun seedBuilding() {
+        configStore.saveActive(
+            listOf(
+                EditorBuilding(
+                    id = "editor-a",
+                    name = "A栋",
+                    polygon = listOf(
+                        LngLat(113.1000, 23.1000),
+                        LngLat(113.1004, 23.1000),
+                        LngLat(113.1004, 23.1003),
+                        LngLat(113.1000, 23.1003),
+                    ),
+                ),
+            ),
+        )
+    }
+
     // ------------------------------------------------------------ 初始状态
 
     @Test
@@ -462,20 +485,7 @@ class MapEditorViewModelTest {
     @Test
     fun `配置里已有的楼栋不会与新画的楼栋撞 id`() {
         // 先在配置里放一栋楼，模拟「上次编辑保存过」
-        configStore.saveActive(
-            listOf(
-                EditorBuilding(
-                    id = "editor-a",
-                    name = "A栋",
-                    polygon = listOf(
-                        LngLat(113.1000, 23.1000),
-                        LngLat(113.1004, 23.1000),
-                        LngLat(113.1004, 23.1003),
-                        LngLat(113.1000, 23.1003),
-                    ),
-                ),
-            ),
-        )
+        seedBuilding()
 
         val vm = viewModel()
         assertEquals("应把配置里的楼栋读进来", 1, vm.uiState.value.buildings.size)
@@ -498,20 +508,7 @@ class MapEditorViewModelTest {
     @Test
     fun `撤销能把配置里读进来的楼栋也撤回来`() {
         // 这份楼栋「已经写进配置」，正是用户抱怨撤不掉的那种
-        configStore.saveActive(
-            listOf(
-                EditorBuilding(
-                    id = "editor-a",
-                    name = "A栋",
-                    polygon = listOf(
-                        LngLat(113.1000, 23.1000),
-                        LngLat(113.1004, 23.1000),
-                        LngLat(113.1004, 23.1003),
-                        LngLat(113.1000, 23.1003),
-                    ),
-                ),
-            ),
-        )
+        seedBuilding()
 
         val vm = viewModel()
         val id = vm.uiState.value.buildings.single().id
@@ -580,6 +577,119 @@ class MapEditorViewModelTest {
             vm.uiState.value.buildings.single().polygon.first().lng,
             1e-9,
         )
+    }
+
+    // ------------------------------------------------------------ 自由多边形（钢笔）
+
+    @Test
+    fun `钢笔连点三次就能成面`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.setMode(EditorMode.PolygonRoom)
+        vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
+        vm.setDraftName("异形教室")
+
+        vm.onTap(LngLat(113.1410, 23.1410))
+        vm.onTap(LngLat(113.1414, 23.1410))
+        assertFalse("两个点还围不成面", vm.uiState.value.canFinishDraft)
+
+        vm.onTap(LngLat(113.1412, 23.1413))
+        assertTrue("三个点就该能成面", vm.uiState.value.canFinishDraft)
+
+        vm.finishDraft()
+
+        val element = vm.uiState.value.buildings.single().floor(1)!!.elements.single()
+        assertEquals("异形教室", element.name)
+        assertEquals("顶点应原样保留，不做矩形化", 3, element.points.size)
+        assertEquals(ElementType.Room, element.elementType)
+    }
+
+    @Test
+    fun `钢笔画的外轮廓不是矩形`() {
+        val vm = viewModel()
+        vm.setMode(EditorMode.BuildingPolygon)
+        vm.setDraftName("三角形楼")
+        vm.onTap(LngLat(113.1320, 23.1320))
+        vm.onTap(LngLat(113.1324, 23.1320))
+        vm.onTap(LngLat(113.1322, 23.1323))
+        vm.finishDraft()
+
+        val polygon = vm.uiState.value.buildings.single().polygon
+        assertEquals("钢笔不该被矩形化", 3, polygon.size)
+    }
+
+    @Test
+    fun `钢笔模式下拖拽不会画出图形`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.setMode(EditorMode.PolygonRoom)
+        vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
+
+        drag(vm)
+
+        assertTrue("拖拽不该落下草稿", vm.uiState.value.draftPoints.isEmpty())
+        assertEquals(
+            "也不该凭空生成一个元素",
+            0,
+            vm.uiState.value.buildings.single().floor(1)?.elements?.size ?: 0,
+        )
+    }
+
+    @Test
+    fun `同一个位置连点两下不会被记成两个顶点`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.setMode(EditorMode.PolygonRoom)
+        vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
+
+        val p = LngLat(113.1420, 23.1420)
+        vm.onTap(p)
+        vm.onTap(p)
+
+        assertEquals("手指抖动不该产生零长度边", 1, vm.uiState.value.draftPoints.size)
+    }
+
+    @Test
+    fun `撤销会先退掉钢笔刚落的那个点`() {
+        val vm = viewModel()
+        drawBuilding(vm, "A栋")
+        vm.setMode(EditorMode.PolygonRoom)
+        vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
+
+        vm.onTap(LngLat(113.1420, 23.1420))
+        vm.onTap(LngLat(113.1424, 23.1420))
+        vm.onTap(LngLat(113.1422, 23.1423))
+        assertTrue("有草稿时撤销按钮要是亮的", vm.uiState.value.canUndo)
+
+        vm.undo()
+        assertEquals("应退掉最后一个点", 2, vm.uiState.value.draftPoints.size)
+
+        vm.undo()
+        vm.undo()
+        assertTrue("退光了就清空草稿", vm.uiState.value.draftPoints.isEmpty())
+
+        // 草稿退干净之后，再按撤销才轮到「画楼栋」那一步 ——
+        // 顺序错了的话用户会一下子丢掉整栋楼
+        vm.undo()
+        assertTrue("草稿退光后，撤销才轮到上一步的楼栋", vm.uiState.value.buildings.isEmpty())
+    }
+
+    @Test
+    fun `切走钢笔模式会清掉草稿并复位撤销可用性`() {
+        // 预置一份配置：这样历史栈本来就是空的，canUndo 只可能由草稿撑着
+        seedBuilding()
+        val vm = viewModel()
+        assertFalse("刚从文件读进来时没有可撤销的东西", vm.uiState.value.canUndo)
+
+        vm.setMode(EditorMode.PolygonRoom)
+        vm.setTargetBuilding(vm.uiState.value.buildings.first().id)
+        vm.onTap(LngLat(113.1420, 23.1420))
+        assertTrue("只有草稿撑着，撤销按钮也该亮", vm.uiState.value.canUndo)
+
+        vm.setMode(EditorMode.Room)
+
+        assertTrue(vm.uiState.value.draftPoints.isEmpty())
+        assertFalse("草稿没了，撤销按钮要跟着灰掉", vm.uiState.value.canUndo)
     }
 
     // ------------------------------------------------------------ 编辑形状

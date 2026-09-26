@@ -306,14 +306,32 @@ class MapEditorViewModel(
     }
 
     private fun syncUndoFlags() {
-        _uiState.value = _uiState.value.copy(
-            canUndo = history.isNotEmpty(),
+        val state = _uiState.value
+        _uiState.value = state.copy(
+            // 正在用钢笔连点：此时「撤销」要能退掉刚落的那个点，
+            // 所以哪怕历史栈是空的也得把按钮点亮
+            canUndo = history.isNotEmpty() || hasPenDraft(state),
             canRedo = redoStack.isNotEmpty(),
         )
     }
 
+    /** 是否有「画到一半的钢笔草稿」。 */
+    private fun hasPenDraft(state: EditorUiState): Boolean =
+        state.mode.isPen && state.draftPoints.isNotEmpty()
+
     /** 撤销上一步。 */
     fun undo() {
+        val state = _uiState.value
+
+        // 钢笔草稿优先退点：用户说「撤销不好用」，最常见的就是画多边形时点错一个
+        if (hasPenDraft(state)) {
+            val rest = state.draftPoints.dropLast(1)
+            _uiState.value = state.copy(draftPoints = rest)
+            syncUndoFlags()
+            emit(if (rest.isEmpty()) "已清掉草稿" else "已退回上一个点（还剩 ${rest.size} 个）")
+            return
+        }
+
         if (history.isEmpty()) {
             emit("没有可撤销的操作")
             return
@@ -359,6 +377,8 @@ class MapEditorViewModel(
             editMode = false,
             selection = null,
         )
+        // 草稿被清掉了，撤销按钮的可用性要跟着重算（钢笔草稿也算一步）
+        syncUndoFlags()
     }
 
     fun setTargetBuilding(id: String?) {
@@ -687,11 +707,41 @@ class MapEditorViewModel(
             emit("请先选定要画在哪栋楼，再开始绘制")
             return
         }
+        // 钢笔：每点一下加一个顶点，点够三个再按「成面」闭合
+        if (state.mode.isPen) {
+            appendPenPoint(state, point)
+            return
+        }
         if (!state.mode.isPoint) {
             emit("按住拖动框出范围（不用逐点点选）")
             return
         }
         commitPoints(points = listOf(point), name = state.draftName)
+    }
+
+    /**
+     * 钢笔模式下落一个顶点。
+     *
+     * 会挡掉「和上一个点几乎重合」的点击 —— 手指点两下同一个位置的抖动很常见，
+     * 那些重复点会让多边形出现零长度边，`isValidPolygon` 判不过，用户却看不出原因。
+     */
+    private fun appendPenPoint(state: EditorUiState, point: LngLat) {
+        val last = state.draftPoints.lastOrNull()
+        if (last != null && Geo.distanceMeters(last, point) < PEN_MIN_STEP_M) {
+            emit("和上一个点太近了，往外点一点")
+            return
+        }
+        val points = state.draftPoints + point
+        _uiState.value = state.copy(draftPoints = points)
+        syncUndoFlags()
+        emit(
+            if (points.size >= EditorUiState.MIN_POLYGON_POINTS) {
+                "已落下第 ${points.size} 个点，点「成面」闭合；还能继续加点"
+            } else {
+                "已落下第 ${points.size} 个点，至少还要 " +
+                    "${EditorUiState.MIN_POLYGON_POINTS - points.size} 个"
+            },
+        )
     }
 
     /** 拖拽开始。 */
@@ -701,6 +751,12 @@ class MapEditorViewModel(
         // 编辑模式：拖选中图形的顶点或整体平移
         if (state.editMode) {
             onShapeDragStart(point)
+            return
+        }
+
+        // 钢笔模式不吃拖拽：它是「连续点」，拖出来的矩形会让人以为画错了工具
+        if (state.mode.isPen) {
+            emit("自由多边形是「连续点」画法：点一下落一个点，点够 3 个再按「成面」")
             return
         }
 
@@ -756,6 +812,8 @@ class MapEditorViewModel(
             dragStart = null,
             selection = null,
         )
+        // 草稿没了，钢笔那条「可以撤销」的理由也没了
+        syncUndoFlags()
     }
 
     /** 按当前形状工具算出预览点串。 */
@@ -763,7 +821,8 @@ class MapEditorViewModel(
         when (mode.shape) {
             ElementShape.Rectangle -> EditorBuilding.rectangleFromCorners(start, end)
             ElementShape.Circle -> EditorBuilding.circleFromCenter(start, end)
-            ElementShape.Point -> listOf(start)
+            // 点和钢笔都不靠拖拽累计点串（钢笔走 onTap），这里只是兜底
+            ElementShape.Point, ElementShape.Polygon -> listOf(start)
         }
 
     /** 结束当前图形。 */
@@ -779,7 +838,9 @@ class MapEditorViewModel(
             )
             return
         }
-        if (state.mode == EditorMode.Building) {
+        // 需不需要先选楼栋，正好区分「这是外轮廓」还是「这是楼里的元素」，
+        // 所以这里不问 mode == Building，而是问 needsBuilding —— 自由轮廓也能走通
+        if (state.mode.isOutline) {
             finishBuildingOutline(state)
         } else {
             finishFloorElement(state)
@@ -1127,6 +1188,14 @@ class MapEditorViewModel(
         /** 点顶点 / 边线的命中容差（米）。 */
         const val VERTEX_HIT_M = 12.0
         const val INSERT_TOLERANCE_M = 12.0
+
+        /**
+         * 钢笔连点时两个顶点之间的最小间距（米）。
+         *
+         * 手指在同一个位置点两下会落出几乎重合的点，那些零长度边会让
+         * `isValidPolygon` 判不过，而用户完全看不出为什么。
+         */
+        const val PEN_MIN_STEP_M = 1.0
 
         /** 每次点旋转按钮转多少度。 */
         const val DEFAULT_ROTATE_STEP = 15.0

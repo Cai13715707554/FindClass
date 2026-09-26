@@ -32,7 +32,15 @@ import kotlinx.serialization.json.Json
 enum class ElementShape {
     Rectangle,
     Circle,
+    /** 单点（楼梯口 / 卫生间），只存一个点。 */
     Point,
+    /**
+     * 自由多边形：像 PS 的钢笔那样**连续点**出任意形状。
+     *
+     * 和矩形 / 圆一样最终落到同一份点串上，所以导航算法（质心、走廊排序、
+     * 左右判定）完全不用为它分叉 —— 这也是为什么这里只是一个画法，而不是一种新数据。
+     */
+    Polygon,
 }
 
 /**
@@ -51,9 +59,11 @@ enum class EditorMode(
     val shape: ElementShape = ElementShape.Rectangle,
 ) {
     Building("教学楼", elementType = null, needsBuilding = false, shape = ElementShape.Rectangle),
+    BuildingPolygon("自由轮廓", elementType = null, needsBuilding = false, shape = ElementShape.Polygon),
     Room("教室", ElementType.Room),
     Office("办公室", ElementType.Office),
     CircleRoom("圆形区域", ElementType.Room, shape = ElementShape.Circle),
+    PolygonRoom("自由多边形", ElementType.Room, shape = ElementShape.Polygon),
     Stair("楼梯口", ElementType.Stair, shape = ElementShape.Point),
     Toilet("卫生间", ElementType.Toilet, shape = ElementShape.Point),
     ;
@@ -61,10 +71,24 @@ enum class EditorMode(
     /** 是否是单点元素（点一下即可，不需要拖）。 */
     val isPoint: Boolean get() = shape == ElementShape.Point
 
+    /** 是否是「连续点」画法（钢笔）。这类模式不响应拖拽，靠一次次点击落点。 */
+    val isPen: Boolean get() = shape == ElementShape.Polygon
+
+    /** 画的是楼栋外轮廓，还是楼层内的一个元素。 */
+    val isOutline: Boolean get() = !needsBuilding
+
     companion object {
         /** 下拉菜单里的顺序，最常用的放前面。 */
-        val menuOrder: List<EditorMode> =
-            listOf(Building, Room, Office, CircleRoom, Stair, Toilet)
+        val menuOrder: List<EditorMode> = listOf(
+            Building,
+            BuildingPolygon,
+            Room,
+            Office,
+            CircleRoom,
+            PolygonRoom,
+            Stair,
+            Toilet,
+        )
     }
 }
 

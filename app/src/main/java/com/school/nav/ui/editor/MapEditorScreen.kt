@@ -801,6 +801,16 @@ private fun statusLine(state: EditorUiState): String = when {
 
     state.mode.isPoint -> "点一下放置${state.mode.label}（不用拖、不用画边界）"
 
+    // 钢笔：连续点，点够三个再成面
+    state.mode.isPen && state.draftPoints.isEmpty() ->
+        "连续点出${state.mode.label}的每个角（像钢笔工具），点够 3 个再按「成面」"
+
+    state.mode.isPen && !state.canFinishDraft ->
+        "已落 ${state.draftPoints.size} 个点，至少还要 " +
+            "${EditorUiState.MIN_POLYGON_POINTS - state.draftPoints.size} 个"
+
+    state.mode.isPen -> "已落 ${state.draftPoints.size} 个点，可继续加点，或按「成面」闭合"
+
     // 拖拽绘制
     state.draftPoints.isEmpty() && state.mode == EditorMode.Building ->
         "按住拖动框出楼栋外轮廓（也可以只拖一个大概范围）"
