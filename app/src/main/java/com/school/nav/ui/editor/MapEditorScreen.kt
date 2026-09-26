@@ -174,7 +174,7 @@ fun MapEditorScreen(
             onDragUpdate = onDragUpdate,
             onDragEnd = onDragEnd,
             onCenterConsumed = onCenterConsumed,
-            draggingEnabled = !state.mode.isPoint || state.editMode,
+            draggingEnabled = state.usesDragGesture,
             selection = if (state.editMode) state.selectedShape else null,
             active = active,
             modifier = Modifier

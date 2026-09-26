@@ -579,6 +579,50 @@ class MapEditorViewModelTest {
         )
     }
 
+    @Test
+    fun `钢笔模式必须走点击这条路而不是拖拽`() {
+        // 回归：AmapEditorView 里「拖拽监听」和「地图点击回调」是互斥的
+        // （装了拖拽就会 setOnMapClickListener(null)）。
+        // 曾经这里判成 !isPoint，于是钢笔模式装了拖拽监听、永远收不到点击，
+        // 表现为「切到自由多边形之后点地图一点反应都没有」。
+        val vm = viewModel()
+
+        vm.setMode(EditorMode.PolygonRoom)
+        assertFalse("钢笔靠点击落点，不能占掉点击回调", vm.uiState.value.usesDragGesture)
+
+        vm.setMode(EditorMode.BuildingPolygon)
+        assertFalse("自由轮廓同样是点击落点", vm.uiState.value.usesDragGesture)
+
+        vm.setMode(EditorMode.Toilet)
+        assertFalse("单点元素也是点击", vm.uiState.value.usesDragGesture)
+
+        vm.setMode(EditorMode.Room)
+        assertTrue("矩形要拖", vm.uiState.value.usesDragGesture)
+
+        vm.setMode(EditorMode.CircleRoom)
+        assertTrue("圆要拖", vm.uiState.value.usesDragGesture)
+
+        vm.setMode(EditorMode.Building)
+        assertTrue("楼栋外轮廓要拖", vm.uiState.value.usesDragGesture)
+
+        vm.setMode(EditorMode.Toilet)
+        vm.setEditMode(true)
+        assertTrue("编辑模式要在拖拽这条路上才能拖顶点", vm.uiState.value.usesDragGesture)
+    }
+
+    @Test
+    fun `没选楼栋时拖拽会明确提示而不是毫无反应`() {
+        val vm = viewModel()
+        vm.setMode(EditorMode.Room)
+        assertFalse(vm.uiState.value.canDraw)
+
+        // 这个模式下地图点击回调是关掉的，所以提示只能由 onDragStart 发出；
+        // 静默 return 的话用户会以为 App 卡住了
+        vm.onDragStart(dragFrom)
+
+        assertTrue("不该落下任何草稿", vm.uiState.value.draftPoints.isEmpty())
+    }
+
     // ------------------------------------------------------------ 自由多边形（钢笔）
 
     @Test

@@ -126,6 +126,23 @@ data class EditorUiState(
     /** 当前模式是否是跨层元素（楼梯），需要选起始层与结束层。 */
     val isCrossFloorMode: Boolean get() = mode.elementType == com.school.nav.core.model.ElementType.Stair
 
+    /**
+     * 当前要不要装「按下 → 拖动 → 抬起」这套手势。
+     *
+     * `AmapEditorView` 里这两条路是**互斥**的：
+     *  - 装了拖拽监听，就**收不到**地图点击回调（`setOnMapClickListener(null)`）；
+     *  - 不装，就只有点击回调。
+     *
+     * 所以这个属性决定了「哪些模式还能点」：
+     *  - 矩形 / 圆：要拖，不能点 → true
+     *  - 单点（楼梯口 / 卫生间）：点一下落点 → false
+     *  - 钢笔（自由多边形 / 自由轮廓）：连续点，**每次点击就是落一个顶点** → false
+     *    （如果这里判成 true，钢笔就永远收不到点击，画不出任何东西）
+     *  - 编辑模式：拖顶点 / 拖整体 → true
+     */
+    val usesDragGesture: Boolean
+        get() = editMode || (!mode.isPoint && !mode.isPen)
+
     /** 目标楼栋的可选层号。 */
     val floorOptions: IntRange get() = targetBuilding?.levelRange ?: (1..1)
 
@@ -760,7 +777,15 @@ class MapEditorViewModel(
             return
         }
 
-        if (!state.canDraw || state.mode.isPoint) return
+        if (state.mode.isPoint) return
+
+        // 这里必须吭声：这个模式下地图点击回调是关掉的，
+        // 静默 return 的话用户拖了半天完全没有任何反馈
+        if (!state.canDraw) {
+            emit("请先选定要画在哪栋楼，再开始绘制")
+            return
+        }
+
         _uiState.value = state.copy(dragStart = point, draftPoints = listOf(point))
     }
 
