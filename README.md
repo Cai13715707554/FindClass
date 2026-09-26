@@ -22,9 +22,10 @@
 | 项目 | 状态 |
 | --- | --- |
 | Debug APK 构建 | ✅ 成功（`app/build/outputs/apk/debug/`，按 ABI 拆分 + universal） |
-| `:core` / `:app` 单元测试 | ✅ **全部通过**（含排序、文案、存储、合并、编辑器状态机） |
-| 地图编辑器（绘制楼栋轮廓） | ✅ 已实现，⚠️ **未在真机验证地图渲染**（需要你自己的高德 Key） |
-| 真机验证（GPS / 气压计 / 权限） | ❌ 未做（本机无设备，见 7.3） |
+| `:core` 单元测试 | ✅ **80 个用例全绿**（7 个测试类；1 个 skip 是平台相关的有序性检查） |
+| `:app` 单元测试 | ✅ **99 个用例全绿**（4 个测试类：编辑器状态机 / 多配置存储 / Key / 定位兜底） |
+| 地图编辑器（绘制 + 编辑形状 + 多配置） | ✅ 已实现，⚠️ **未在真机验证地图渲染**（需要你自己的高德 Key） |
+| 真机验证（GPS / 气压计 / 权限） | ❌ 未做（本机无设备，见 7.2） |
 
 > ⚠️ 请先看**第七节「已知问题」**，那里写清了未验证的部分，以及为什么 `No target device found`。
 
@@ -35,8 +36,8 @@
 | 页签 | 内容 |
 | --- | --- |
 | **首页** | 当前位置卡片（三级可改）+ 搜索/快捷目标 + 文字导航 |
-| **地图** | 地图编辑器：**卫星底图全屏**，右上角下拉切换绘制模式（教学楼 / 教室 / 办公室 / 楼梯口 / 卫生间），顶部搜索地点，画完保存并自动导入 |
-| **我的** | 设置入口（填高德 Key）+ 定位测试（实时经纬度、精度、来源、高度）+ 关于 |
+| **地图** | 地图编辑器：**卫星底图全屏**，右上角下拉切换绘制模式（教学楼 / 教室 / 办公室 / 圆形区域 / 楼梯口 / 卫生间），顶部搜索地点，右上角一排工具按钮，画完保存并自动导入 |
+| **我的** | 设置入口（填高德 Key + **切换 / 新建 / 复制 / 改名 / 删除配置文件**）+ 定位测试（实时经纬度、精度、来源、高度）+ 关于 |
 
 **首次使用地图编辑器前必须先填高德 Key**：进入「我的 → 设置」粘贴 Key。
 没填时地图页不会白屏，而是显示引导和「去设置里填写 Key」按钮。
@@ -46,29 +47,66 @@
 1. 打开地图页，会自动定位到你所在位置（第一次取到定位时把地图移过去）
 2. 如果在家里、看不到学校：点顶部**搜索框** —— 它会就地展开成输入框（把右侧模式下拉
    **吞并**掉），**边输边出结果**，结果面板从搜索框下面拉出来，点结果跳到那个地点
-3. 右上角下拉选模式，**两种画法**：
+3. 右上角下拉选模式，**三种画法**：
 
    | 模式 | 画法 |
    | --- | --- |
    | **教学楼**（外轮廓） | **按住拖动框出范围**，松手即成型，再填名称 + 楼层数 |
    | **教室 / 办公室** | 先在「清单」里点一栋楼作为宿主、选好楼层，再按住拖动框出范围 |
-   | **楼梯口 / 卫生间** | **点一下就是它** —— 不用拖、不用画边界 |
+   | **圆形区域** | 按下的点是**圆心**，拖出去的距离是**半径**（存成 32 边多边形，导航算法不用为「圆」单独开分支） |
+   | **楼梯口 / 卫生间** | **点一下就是它** —— 不用拖、不用画边界，地图上画成实心圆点，一定看得见 |
 
    楼梯额外要选**起始层与结束层**（楼梯穿过楼板，会在覆盖的每一层都生成一份同名楼梯）。
-4. 右侧圆形按钮：回到我的位置 / 放弃当前绘制
+4. 右侧一排工具按钮（从上到下）：
+
+   | 按钮 | 作用 |
+   | --- | --- |
+   | 定位 | 把地图移回我的位置 |
+   | **撤销 / 重做** | 整份数据的快照栈，**连已经写进配置文件的楼栋也能撤回**；一次拖拽只算一步 |
+   | **编辑形状** | 打开后可以点选图形、拖顶点、拖整体平移 |
+   | **旋转** | 选中图形每次转 15° |
+   | **加点 / 删点** | 在「最近点击处」的边上插点、或删掉最近的顶点 |
+   | **删除图形** | 删掉当前选中的轮廓或元素 |
+   | 放弃草稿 | 丢掉正在画的那一笔 |
+
 5. 底部「保存导入」写入配置文件，**下次启动 App 时自动生效**
 
 **为什么是拖拽而不是逐点点选**：点三个点又慢又难对齐。矩形是最常见的房间形状，
 拖一下就有四条边；而楼梯口、卫生间本来就没有明确边界，画矩形纯属白费功夫 ——
 导航只需要知道它「在哪」，所以它们就是一个点。
 
+**为什么要「编辑形状」而不是重画**：轮廓画歪一点是常事，重画等于把那一层的
+元素全丢掉。选中之后拖顶点 / 加点 / 删点 / 旋转，改的是同一份数据，楼层元素不受影响。
+
 地图上的元素按类型着色：楼梯口橙色（导航里的关键转向点）、卫生间灰色、其余青色；
-楼栋外轮廓是绿色。
+楼栋外轮廓是绿色。**选中的图形会把每个顶点画成橙色小手柄**，方便看清楚在拖哪个角。
 
 **切页签不会重置地图**：地图页**常驻组合树**，切走时只是把它设为不可见并停掉手势。
 （早先试过两个做法都不行：把 ViewModel 提到 Activity 作用域只解决了状态重建，
 MapView 仍会随页面销毁；换成 `movableContentOf` 也没用，`AndroidView` 在移动时
 View 还是会被重建。）
+
+### 多份配置：这个软件不针对某一个学校
+
+配置是「一个学校一份」，都放在同一个目录里：
+
+```
+/data/data/<包名>/files/config/
+  ├── editor_buildings.json     <- 默认那一份
+  ├── 实验中学.json
+  └── ...
+/sdcard/Android/data/<包名>/files/config/   <- 同一份内容镜像到这里，方便取走
+```
+
+在「我的 → 设置 → 配置（一个学校一份）」里可以：
+
+- **切换**：点整行即可，当前生效的那份用蓝框 + 「使用中」标出来
+- **新建 / 复制 / 改名 / 删除**：复制是「照着改」，比从零画快得多；删除有二次确认
+- **换学校**：把别人的 `xxx.json` 拷进上面那个外部目录，点「切换」就生效
+
+「当前用哪一份」记在 SharedPreferences 而不是文件内容里 —— 配置本身应该是自包含的
+数据，「这台机器正在看哪一份」是本地状态，混进数据里文件就没法互相拷贝了。
+**切换配置会清空撤销栈**，避免「在新学校里撤销，结果退回上一所学校」。
 
 ### 关于元素类型
 
@@ -111,26 +149,31 @@ sdk.dir=D\:\\xiangmu\\Projram\\Android\\SDK
 # 编译 Debug APK
 powershell -File tools/gradle.ps1 assembleDebug
 
-# 跑纯算法单元测试
+# 跑纯算法单元测试（:core，80 个用例，不需要设备）
 powershell -File tools/gradle.ps1 :core:test
 
-# 校验 assets/buildings.json 的数据自检与验收场景
+# 跑编辑器状态机 / 配置存储 / Key / 定位兜底（:app，99 个用例）
 powershell -File tools/gradle.ps1 :app:testDebugUnitTest
 
-# 全部一起
-powershell -File tools/gradle.ps1 :core:test :app:assembleDebug
+# 交付前全量：core 单测 + app 单测 + 构建 APK
+powershell -File tools/gradle.ps1 :core:test :app:testDebugUnitTest :app:assembleDebug
+
+# 迭代时只跑相关的（快很多）
+powershell -File tools/gradle.ps1 :app:testDebugUnitTest --tests "*MapEditorViewModelTest"
 ```
 
-生成的 APK：
+生成的 APK（按 ABI 拆分，另有一个 universal）：
 
 ```
-app/build/outputs/apk/debug/app-debug.apk
+app/build/outputs/apk/debug/app-arm64-v8a-debug.apk      42.7 MB
+app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk    36.4 MB
+app/build/outputs/apk/debug/app-universal-debug.apk      55.6 MB
 ```
 
 安装到设备：
 
 ```powershell
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+adb install -r app\build\outputs\apk\debug\app-arm64-v8a-debug.apk
 ```
 
 > **注意**：本机沙箱不允许写入 `%USERPROFILE%\.gradle`，所以 `tools/gradle.ps1` 把
@@ -145,7 +188,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```powershell
 node tools/gen-buildings-json.mjs
 # 已生成 .../app/src/main/assets/buildings.json
-# 楼栋 2 栋 / 楼层 6 层 / 元素 58 个
+# 楼栋 2 栋 / 楼层 6 层 / 元素 50 个
 ```
 
 ### 2.4 高德地图 / 定位（重要更正）
@@ -247,20 +290,30 @@ FindClass/
 │       │   ├── MainActivity.kt      单 Activity，请求权限 + 挂载 Compose
 │       │   ├── NavApplication.kt    创建依赖容器 + 数据自检
 │       │   ├── AppContainer.kt      手写依赖容器（MVP 规模下比 Hilt 轻）
-│       │   ├── data/CampusAssets.kt 读 assets
+│       │   ├── data/
+│       │   │   ├── CampusAssets.kt  读 assets + 当前生效的配置装配仓库
+│       │   │   ├── ConfigStore.kt   多份配置文件：列出 / 切换 / 新建 / 复制 / 改名 / 删除
+│       │   │   ├── ApiKeyStore.kt   高德 Key（Android 平台 + Web服务）
+│       │   │   ├── PoiSearcher.kt   搜索统一入口（高德 Web API 优先，退回 Geocoder）
+│       │   │   └── AmapPoiSearcher.kt  高德 Web 服务 POI 搜索
 │       │   ├── location/
 │       │   │   ├── SystemLocationSource.kt  LocationManager 实现
 │       │   │   ├── AmapLocationSource.kt    高德 SDK（反射接入，可选）
 │       │   │   ├── BarometricAltimeter.kt   TYPE_PRESSURE -> Flow<Float>
 │       │   │   └── FloorEstimator.kt        楼层估算 + 楼栋漂移锁定
 │       │   ├── state/
-│       │   │   ├── NavViewModel.kt  状态机：手动优先、导航派生重算
-│       │   │   ├── NavUiState.kt    UI 状态模型
-│       │   │   └── UserPreferences.kt  DataStore 持久化手动修正
+│       │   │   ├── NavViewModel.kt          状态机：手动优先、导航派生重算
+│       │   │   ├── MapEditorViewModel.kt    编辑器状态机：绘制 / 编辑形状 / 撤销 / 多配置
+│       │   │   ├── NavUiState.kt            UI 状态模型
+│       │   │   └── UserPreferences.kt       DataStore 持久化手动修正
 │       │   └── ui/
-│       │       ├── theme/Theme.kt        与 Demo 一致的配色
-│       │       ├── home/HomeScreen.kt    首页
-│       │       └── components/           位置卡片、搜索卡片、导航卡片、修改弹层
+│       │       ├── theme/Theme.kt          与 Demo 一致的配色
+│       │       ├── home/AppShell.kt        底部导航 + 三页签 + 设置子页
+│       │       ├── home/HomeScreen.kt      首页
+│       │       ├── editor/MapEditorScreen.kt  编辑器控件层（浮在地图上的卡片与按钮）
+│       │       ├── editor/AmapEditorView.kt   高德地图渲染 + 触摸转发
+│       │       ├── settings/SettingsScreen.kt Key 与配置管理
+│       │       └── components/             位置卡片、搜索卡片、导航卡片、修改弹层
 │       └── res/                         图标（矢量 + 各密度 PNG）、主题、文案
 │
 ├── docs/                        产品文档、技术方案、HTML Demo（原始需求）
@@ -313,8 +366,10 @@ FindClass/
 - 吸附成 `±(1,0)` / `±(0,1)` 后，`leftVector` 变成纯净的北向或东向，判定恢复正常。
 
 排序键还需要**确定性次级键**（投影坐标 → 北侧优先 → 自西向东 → id）：
-走廊同一经度上可能同时有教室和电梯口，没有次级键时相等键的相对顺序不可复现，
-导航文案就会不稳定。
+走廊同一经度上完全可能有多个元素（示例数据里「卫生间」就与南侧教室同经度），
+没有次级键时相等键的相对顺序不可复现，导航文案就会不稳定。
+投影坐标还要先量化到 1e-6 米 —— 实测浮点噪声在 1.45e-9 米量级，
+不量化的话它会一直把次级键盖掉。
 
 ### 4.3 左右方位：看「目标在走廊哪一侧」
 
@@ -404,13 +459,14 @@ FindClass/
 
 | 字段 | 说明 |
 | --- | --- |
-| `type` | `room` 教室 / `office` 办公室 / `stair` 楼梯口 / `elevator` 电梯口 / `entrance` 入口 / `toilet` 卫生间 |
+| `type` | `room` 教室 / `office` 办公室 / `stair` 楼梯口 / `toilet` 卫生间（**只有这四种**） |
 | `relative_height_m` | **相对地面层高度**，首层必须为 0，逐层递增 |
-| `points` | 统一用点串表示。楼栋是多边形，教室/楼梯/电梯也是点串（MVP 不做平面图渲染） |
+| `points` | 统一用点串表示。楼栋是多边形；教室 / 办公室是矩形或圆（圆存成 32 边多边形）；楼梯口 / 卫生间是**单个点** |
+| `to_level` | 仅跨层元素（楼梯口）有：结束楼层。合并进导航数据时会在覆盖的每一层都生成一份同名楼梯 |
 | `id` | 仅内部关联，**任何导航文案都不出现 id** |
 | `name` | 展示与导航文案唯一使用的字段 |
 
-内置数据：**A栋**（1F 教研室层 / 2F 实验室层 / 3F 高一年级层）、**B栋**（1F 报告厅层 / 2F 图书馆层 / 3F 机房层），共 6 层 58 个元素。
+内置数据：**A栋**（1F 教研室层 / 2F 实验室层 / 3F 高一年级层）、**B栋**（1F 报告厅层 / 2F 图书馆层 / 3F 机房层），共 6 层 50 个元素。
 
 `CampusRepository.validate()` 会检查：多边形点数、楼层高度递增、首层为 0、
 id 唯一、元素有中文名与几何点。App 启动时自检并把问题打到 logcat（不崩溃，
@@ -458,61 +514,24 @@ id 唯一、元素有中文名与几何点。App 启动时自检并把问题打�
 
 ## 七、已知问题
 
-### 7.1 剩余 3 个单元测试断言（已修，待复跑）
+### 7.1 曾经踩过、已经修好并复跑通过的坑
 
-上一轮完整构建的结果是：**`:app:assembleDebug` 成功产出 APK**，
-`:core:test` 共 63 个用例，**3 个断言未过**。三者都已定位并修好，但**尚未重新编译验证**：
+这些都是**已经修掉并且在完整构建里跑绿**的，写在这里是为了以后别再踩一遍：
 
-| 用例 | 原因 | 修复 |
+| 症状 | 根因 | 修复 |
 | --- | --- | --- |
-| `按走廊主轴自西向东排序` | 走廊同一经度上同时有「电梯口」和「历史教研室」，缺少确定性次级键，顺序不可复现 | `FloorSorter.sort` 排序键补上「投影坐标 → 北侧优先 → 自西向东 → id」 |
-| `南北走向的走廊给出确定顺序` | 与上同源：退化分支同样需要次级键兜底 | 同上（该用例期望 `[南一, 北一, 电梯]`） |
-| `向西走时仍按目标所在的走廊侧给方位` | 测试期望字符串里少了一个逗号（`多媒体教室` 后缺 `，`） | 修正断言字符串 |
+| 走廊同经度上多个元素顺序不可复现 | PCA 主轴被真实数据带偏约 6°，加上浮点噪声（1.45e-9 m）盖住了次级键 | `FloorSorter` 先把主轴**吸附到正东西 / 正南北**，再把投影坐标量化到 1e-6 m，最后用显式 `Comparator`：投影 → 北侧优先 → 自西向东 → id |
+| 方位说反（左右颠倒） | `atan2` 两个参数写反，方位角整体差 90° | 改成 `atan2(uy, ux)` |
+| 方向是反的（往西走却说往东） | 纬度比较写反（`b.lat.compareTo(a.lat)`） | 改成北侧优先的比较顺序 |
+| 撤不掉「已经写进配置」的楼栋 | 旧实现只记「本次新画的点」 | 改成整份 `List<EditorBuilding>` 快照栈，不区分来源；一次拖拽用 `ShapeDrag` 合并成一步 |
+| 楼梯口、厕所添加后看不见 | 点元素只画在 Marker 上，透明度和层级都不受控 | 点元素改用 `CircleOptions` 画实心圆（半径 6 m），必可见 |
+| 切页签地图还是刷新 | ViewModel 作用域、`movableContentOf` 都救不了 MapView | 地图**常驻组合树**，`active=false` 时 `MapView` 自己设 `INVISIBLE` 并解除手势 |
+| 搜索栏被状态栏盖住 / 搜索不到东西 | 没做 `windowInsetsPadding`；Geocoder 只做精确匹配 | 顶部避让状态栏；搜索改走高德 Web 服务 POI（可模糊），Geocoder 只作兜底 |
+| 定位中途被关掉时永远停在「定位中…」 | `locationUpdates()` 返回空流，`isLocating` 无人置回 | 流类型改为 `Flow<LocationUpdate>`，显式承载 `Unavailable(reason)` |
+| 设置页里 `list()` 直接把 App 打崩（栈溢出） | `list()` 和 `activeFileName()` 互相调用 | `list()` 只读 SharedPreferences 里记的原始名字，不再走带回退的 `activeFileName()` |
+| 把配置改名成同一个名字，结果多出一份 `xxx-2.json` | 先查重再判断同名，顺序反了 | `rename` 先比显示名，相同就直接返回；`sanitize` 顺手吃掉 `.json` 后缀 |
 
-复跑命令：
-
-```powershell
-powershell -File tools/gradle.ps1 :core:test
-```
-
-如果还有失败，`core/build/reports/tests/test/index.html` 有完整报告；
-断言都用 `assertEquals` 并带上实际文案，失败信息里能直接看到差异。
-
-### 7.2 定位不可用兜底缺陷：已修，未编译验证
-
-**症状**：如果用户是在 App 运行中途去系统设置关掉定位服务，界面会**永远停在「定位中…」**，
-既不说明原因，也看不到「请手动选择位置」的提示。
-
-**原因**：`observeLocation()` 早期只在订阅**前**检查一次 `locationSource.isAvailable()`。
-初始有权限时检查通过，之后服务被关闭，`locationUpdates()` 返回空流、collect 立刻结束，
-而 `isLocating` 再没有任何地方把它置回 `false`。
-
-**修复**（3 处）：
-
-1. `LocationSource.locationUpdates()` 的返回类型从 `Flow<RawLocationFix>` 改为
-   `Flow<LocationUpdate>`，流里显式承载 `Fix` 或 `Unavailable(reason)` ——
-   空流无法表达「为什么取不到点」；
-2. 新增 `LocationAvailability` 枚举区分 `PermissionDenied` / `ServiceDisabled` /
-   `NoProvider`，UI 能给出不同提示；
-3. `NavViewModel` 收到 `Unavailable` 或流结束时**必定**把 `isLocating` 置回 `false`，
-   并通过新增的 `NavUiState.locationUnavailable` 把原因送到位置卡片；
-   `relocate()` 在「之前判定过不可用」时会重新订阅（否则用户去系统里打开定位后点
-   「重新定位」永远恢复不了）。
-
-**顺带做的可测试性改造**：抽出 `PressureSource` 与 `ManualPositionStore` 两个接口，
-让 `NavViewModel` 的单测不必拉起 `SensorManager` 和 DataStore。
-
-**新增测试**：`app/src/test/java/com/school/nav/state/NavViewModelLocationFallbackTest.kt`
-（6 个用例），覆盖「不卡 loading」「原因到达界面文案」「定位不可用时仍能手动完成导航」
-「定位恢复后重新锁定楼栋」。
-
-**⚠️ 这些改动尚未编译验证。** 复跑命令：
-
-```powershell
-powershell -File tools/gradle.ps1 :app:testDebugUnitTest
-```
-
-### 7.3 `No target device found`：没有可用设备
+### 7.2 `No target device found`：没有可用设备
 
 在 Android Studio 点运行报 `No target device found`，**不是代码或构建问题** ——
 APK 已经构建成功，只是没有设备可以安装。本机实测：
@@ -553,7 +572,7 @@ APK 已经构建成功，只是没有设备可以安装。本机实测：
 手动兜底分支；GPS 要在模拟器里手动 set location 才能测楼栋判定。
 所以模拟器验证不了「高度判楼层」这条核心能力。
 
-### 7.4 未做真机验证
+### 7.3 未做真机验证
 
 以下只能上真机确认，本机无设备：
 
@@ -562,17 +581,25 @@ APK 已经构建成功，只是没有设备可以安装。本机实测：
   最大偏差 6 米都是估值，需要真机调）
 - 各厂商 ROM 的后台限制与权限弹窗差异
 - Compose UI 测试（`app/src/androidTest/HomeScreenTest.kt`）需要在模拟器/真机上运行
+- **地图本身的渲染**：高德 `MapView` 是否正常出图、卫星底图能不能加载、POI 搜索
+  Key 是否配对了「Web服务」平台 —— 这些都需要有效 Key + 真机
+- **编辑手感**：拖拽框选的容差（`SELECT_TOLERANCE_M` 8 m / `VERTEX_HIT_M` 12 m）、
+  旋转 15° 是否够用、点元素 6 m 的圆点在大屏手机上是不是太小
+- **切页签后相机是否真的没变**、顶部控件有没有被状态栏或挖孔挡住
 
-### 7.5 有意偏离技术方案的地方
+### 7.4 有意偏离技术方案的地方
 
-| 技术方案原文 | 实际实现 | 原因 |
+| 技术方案 / 产品文档原文 | 实际实现 | 原因 |
 | --- | --- | --- |
 | 高德定位 SDK | 默认系统定位，高德走**反射可选接入** | 高德 aar 只在自己仓库分发，网络受限环境拉不到就把整个工程卡死。抽成 `LocationSource` 接口后换实现不影响任何业务代码 |
 | 高德隐私合规弹窗 | 未做首启同意弹窗 | 上架前必须补（见下） |
 | `kotlinx.serialization` 或 Moshi | 用 `kotlinx.serialization` | 与技术方案首选项一致，`relative_height_m` 用 `@SerialName` 映射 |
 | 多模块 `core-model` / `core-navigation` / `core-location` | 单 `core` 模块 + 分层包 | 技术方案说「MVP 可先单模块」，代码量还没到需要拆的程度 |
+| 产品文档把**地图绘制编辑器**列为「不做」 | **做了**，并且页签常驻入口 | 用户明确要求：没有编辑器就得手写 JSON 录数据，实际不可用 |
+| 产品文档把**平面图 / 自动生成数据**列为「不做」 | 做的是「在高德卫星底图上画轮廓 + 自动导入」，不是自绘平面图 | 用真实底图比自绘平面图省一个数据源，也更符合「教学楼本来就真实存在」 |
+| 编辑器只有「矩形 / 点」两类图形 | 增加了**圆形区域**与**编辑形状**（拖顶点 / 插点 / 删点 / 旋转） | 用户反馈：画歪了只能重画、楼梯口厕所添加后看不见、没有 PS 那种改图形的能力 |
 
-### 7.6 上架前必须补
+### 7.5 上架前必须补
 
 - 首次启动的**隐私政策同意**（高德 SDK 合规要求，也是国内商店硬性要求）
 - 隐私政策、权限说明、SDK 清单
@@ -596,6 +623,9 @@ APK 已经构建成功，只是没有设备可以安装。本机实测：
 | 全程不用米数、不用教室编号 | 文案模板 + 正则断言 | `NavigationEngineTest`（含 `\d+\s*(m\|M\|米)` 反向断言） |
 | 用户改完位置后导航立即重算 | 导航是 `(位置, 目标)` 的派生状态 | 结构保证 |
 | 无气压计或定位失败时仍可手动完成导航 | `floor = null` 分支 + 手动弹层 | `FloorMatcherTest`、`HomeScreenTest` |
+| （自加）不针对单一学校，能换配置 | `ConfigStore` 多文件 + 设置页配置管理 | `ConfigStoreTest`、`MapEditorViewModelTest` |
+| （自加）撤销能覆盖已写进配置的数据 | 整份数据快照栈 | `MapEditorViewModelTest` |
+| （自加）点元素一定可见、图形可改而不是只能重画 | `CircleOptions` 点标记 + 编辑形状模式 | `MapEditorViewModelTest` |
 
 ---
 
